@@ -7,23 +7,34 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SCHEMA = """
+-- Bases de dados: conjuntos de ficheiros que se podem associar a conversas.
+CREATE TABLE IF NOT EXISTS libraries (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS conversations (
   id               TEXT PRIMARY KEY,
   title            TEXT NOT NULL DEFAULT 'Nova conversa',
   pinned           INTEGER NOT NULL DEFAULT 0,
   created_at       TEXT NOT NULL,
-  last_activity_at TEXT NOT NULL
+  last_activity_at TEXT NOT NULL,
+  library_id       TEXT REFERENCES libraries(id) ON DELETE SET NULL
 );
 
+-- Cada documento é de uma conversa ou de uma base de dados (nunca dos dois).
 CREATE TABLE IF NOT EXISTS documents (
   id              TEXT PRIMARY KEY,
-  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE,
+  library_id      TEXT REFERENCES libraries(id) ON DELETE CASCADE,
   filename        TEXT NOT NULL,
   file_type       TEXT NOT NULL CHECK (file_type IN ('pdf','pptx')),
   sha256          TEXT NOT NULL,
   n_chunks        INTEGER NOT NULL,
   stored_path     TEXT NOT NULL,
-  uploaded_at     TEXT NOT NULL
+  uploaded_at     TEXT NOT NULL,
+  CHECK ((conversation_id IS NULL) <> (library_id IS NULL))
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -40,6 +51,34 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, id);
 CREATE INDEX IF NOT EXISTS idx_conv_activity ON conversations(pinned, last_activity_at);
 CREATE INDEX IF NOT EXISTS idx_documents_conv ON documents(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_documents_lib ON documents(library_id);
+
+-- Ferramentas de casos práticos: análise da estrutura de cada documento e a
+-- resposta-modelo de um conjunto de documentos (para não repetir chamadas ao LLM).
+CREATE TABLE IF NOT EXISTS doc_analyses (
+  doc_id     TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  kind       TEXT NOT NULL,
+  content    TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (doc_id, kind)
+);
+
+CREATE TABLE IF NOT EXISTS model_answers (
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  doc_key         TEXT NOT NULL,              -- ids dos documentos, ordenados, separados por vírgulas
+  content         TEXT NOT NULL,
+  created_at      TEXT NOT NULL,
+  PRIMARY KEY (conversation_id, doc_key)
+);
+
+-- Conversas onde cada base de dados já foi usada (perguntas feitas com ela associada).
+-- Fica mesmo depois de a desassociar.
+CREATE TABLE IF NOT EXISTS library_usage (
+  library_id      TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  last_used_at    TEXT NOT NULL,
+  PRIMARY KEY (library_id, conversation_id)
+);
 
 CREATE TABLE IF NOT EXISTS settings (
   id         INTEGER PRIMARY KEY CHECK (id = 1),
@@ -49,6 +88,51 @@ CREATE TABLE IF NOT EXISTS settings (
 """
 
 _initialized: set[str] = set()
+
+
+def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """BDs criadas antes das bases de dados: junta `library_id` às conversas e aos documentos.
+
+    O `documents` tem de ser reconstruído (o `conversation_id` deixa de ser obrigatório).
+    Corre com as chaves estrangeiras desligadas, senão o DROP apagaria as análises em cascata.
+    """
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if "documents" not in tables or "library_id" in _columns(conn, "documents"):
+        return
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN")
+        conn.execute("CREATE TABLE IF NOT EXISTS libraries (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL)")
+        if "library_id" not in _columns(conn, "conversations"):
+            conn.execute("ALTER TABLE conversations ADD COLUMN library_id TEXT REFERENCES libraries(id) ON DELETE SET NULL")
+        conn.execute("""
+            CREATE TABLE documents_new (
+              id              TEXT PRIMARY KEY,
+              conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE,
+              library_id      TEXT REFERENCES libraries(id) ON DELETE CASCADE,
+              filename        TEXT NOT NULL,
+              file_type       TEXT NOT NULL CHECK (file_type IN ('pdf','pptx')),
+              sha256          TEXT NOT NULL,
+              n_chunks        INTEGER NOT NULL,
+              stored_path     TEXT NOT NULL,
+              uploaded_at     TEXT NOT NULL,
+              CHECK ((conversation_id IS NULL) <> (library_id IS NULL))
+            )""")
+        conn.execute(
+            "INSERT INTO documents_new (id, conversation_id, filename, file_type, sha256, n_chunks, stored_path, uploaded_at)"
+            " SELECT id, conversation_id, filename, file_type, sha256, n_chunks, stored_path, uploaded_at FROM documents")
+        conn.execute("DROP TABLE documents")
+        conn.execute("ALTER TABLE documents_new RENAME TO documents")
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 def utcnow() -> str:
@@ -69,6 +153,7 @@ def connect(db_path: Path):
         conn.execute("PRAGMA foreign_keys = ON")
         if str(db_path) not in _initialized:
             conn.execute("PRAGMA journal_mode = WAL")
+            _migrate(conn)
             conn.executescript(SCHEMA)
             _initialized.add(str(db_path))
         conn.execute("BEGIN")

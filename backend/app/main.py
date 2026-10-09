@@ -1,4 +1,4 @@
-"""Arranca a app pública (8000) e a admin (8001) no mesmo processo + tarefas de fundo.
+"""Arranca a app (porta 8000) e as tarefas de fundo.
 
   python -m app.main
 """
@@ -9,10 +9,10 @@ import contextlib
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 
-from .api import admin_routes, public_routes
+from .api import public_routes
 from .core.config import Settings, load_settings
 from .core.state import AppState, build_state
 from .services import conversations as convs
@@ -46,7 +46,8 @@ class GuardMiddleware:
         if method in UNSAFE:
             has_body = int(headers.get("content-length") or 0) > 0 or "transfer-encoding" in headers
             ctype = headers.get("content-type", "").split(";")[0].strip().lower()
-            is_upload = method == "POST" and scope["path"].endswith("/documents")
+            is_upload = (method == "POST" and scope["path"].endswith("/documents")) or (
+                method == "PUT" and scope["path"].startswith("/api/profile/media/"))
             allowed = {"multipart/form-data"} if is_upload else {"application/json"}
             if has_body and ctype not in allowed:
                 resp = JSONResponse({"detail": "Content-Type não permitido."}, status_code=415)
@@ -83,12 +84,11 @@ async def _maintenance_loop(state: AppState) -> None:
 
 
 async def _share_watchdog(state: AppState) -> None:
-    """Quando o link expira, invalida as sessões remotas (Fase 4 também mata o túnel)."""
+    """Quando o link expira: termina o túnel e invalida as sessões remotas."""
     while True:
         await asyncio.sleep(15)
         if state.share.budget is not None and not state.share.budget.active:
-            state.share.stop()
-            state.sessions.revoke_remote()
+            await state.share_manager.stop()
 
 
 def create_public_app(state: AppState, background: bool = True) -> FastAPI:
@@ -99,20 +99,13 @@ def create_public_app(state: AppState, background: bool = True) -> FastAPI:
         yield
         for t in tasks:
             t.cancel()
+        await state.share_manager.stop()  # ao fechar a app, terminar o cloudflared
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.rag = state
     app.add_middleware(GuardMiddleware)
     app.include_router(public_routes.router)
     _mount_frontend(app, state.settings.frontend_dist)
-    return app
-
-
-def create_admin_app(state: AppState) -> FastAPI:
-    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
-    app.state.rag = state
-    app.add_middleware(GuardMiddleware)
-    app.include_router(admin_routes.router)
     return app
 
 
@@ -140,10 +133,8 @@ async def serve(settings: Settings | None = None) -> None:
     public = uvicorn.Server(uvicorn.Config(
         create_public_app(state), host="127.0.0.1", port=settings.public_port,
         proxy_headers=False, access_log=False, log_level="info"))
-    admin = uvicorn.Server(uvicorn.Config(
-        create_admin_app(state), host="127.0.0.1", port=settings.admin_port, access_log=False, log_level="warning"))
-    log.info("Pública: http://127.0.0.1:%d  ·  Admin: http://127.0.0.1:%d", settings.public_port, settings.admin_port)
-    await asyncio.gather(public.serve(), admin.serve())
+    log.info("App: http://127.0.0.1:%d", settings.public_port)
+    await public.serve()
 
 
 if __name__ == "__main__":

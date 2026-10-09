@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Arranca o Ollama (se ainda não estiver a correr) e o backend (portas 8000 e 8001).
+# Arranca o Ollama (se ainda não estiver a correr) e o backend (porta 8000).
 set -euo pipefail
 cd "$(dirname "$0")/../backend"
 
@@ -9,6 +9,12 @@ if ! curl -sf http://127.0.0.1:11434/api/tags >/dev/null; then
   echo "A arrancar o Ollama…"
   (ollama serve >/tmp/ollama.log 2>&1 &)
   for _ in $(seq 1 30); do curl -sf http://127.0.0.1:11434/api/tags >/dev/null && break; sleep 1; done
+fi
+
+# Interface: compilar se ainda não existir (depois de mudar o frontend: cd frontend && npm run build).
+if [ ! -f ../frontend/dist/index.html ]; then
+  echo "A compilar a interface…"
+  (cd ../frontend && npm install --silent && npm run build) || { echo "Falhou a compilação do frontend"; exit 1; }
 fi
 
 [ -f .env ] || { echo "Falta backend/.env (copiar de .env.example)"; exit 1; }

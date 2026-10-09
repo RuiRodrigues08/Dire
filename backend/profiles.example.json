@@ -1,4 +1,4 @@
 {
-  "rui":      { "display_name": "Rui",  "code_hash": "<colar aqui o output de python -m app.tools.hash_code>" },
-  "namorada": { "display_name": "Nome", "code_hash": "<colar aqui o output de python -m app.tools.hash_code>" }
+  "admin": { "display_name": "Rui",  "code_hash": "<colar aqui o output de python -m app.tools.hash_code>" },
+  "user":  { "display_name": "Nome", "code_hash": "<colar aqui o output de python -m app.tools.hash_code>" }
 }

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import math
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -73,10 +74,6 @@ class LinkBudget:
             return "Foi atingido o limite de tokens deste link."
         return None
 
-    def consume(self, tokens: int) -> None:
-        self.questions_used += 1
-        self.tokens_used += tokens
-
 
 class ShareState:
     """Estado do link visto pela API pública. O Share Manager (Fase 4) gere-o."""
@@ -88,9 +85,11 @@ class ShareState:
     def is_active(self) -> bool:
         return self.budget is not None and self.budget.active
 
-    def start(self, minutes: int, max_questions: int | None = None, max_tokens: int | None = None) -> LinkBudget:
+    def start(self, minutes: int | None, max_questions: int | None = None, max_tokens: int | None = None) -> LinkBudget:
+        """`minutes=None`: sem fim marcado, até alguém parar a partilha."""
         self.epoch += 1
-        self.budget = LinkBudget(time.time() + minutes * 60, max_questions, max_tokens)
+        expires = math.inf if minutes is None else time.time() + minutes * 60
+        self.budget = LinkBudget(expires, max_questions, max_tokens)
         return self.budget
 
     def extend(self, minutes: int) -> None:

@@ -8,14 +8,15 @@ from .db import connect, utcnow
 
 DEFAULTS: dict = {
     "theme": "system",
-    "accent": "#7C5CFF",
+    "accent": "#1E4A62",  # azul do logo
     "font": "sans",
     "font_size": "m",
     "density": "normal",
     "radius": "lg",
     "chat_width": "medium",
-    "message_style": "bubbles",
+    "message_style": "modern",
     "background": "plain",
+    "login_background": "default",
     "send_with": "enter",
     "sources_open": False,
     "show_tokens": False,
@@ -29,12 +30,18 @@ _ENUMS = {
     "density": {"compact", "normal", "comfortable"},
     "radius": {"none", "sm", "md", "lg", "xl"},
     "chat_width": {"narrow", "medium", "wide"},
-    "message_style": {"bubbles", "clean"},
-    "background": {"plain", "gradient"},
+    "message_style": {"modern", "bubbles", "clean"},
+    "background": {"plain", "gradient", "mesh", "dots", "image"},
+    "login_background": {"default", "gradient", "mesh", "dots", "image"},
     "send_with": {"enter", "ctrl_enter"},
 }
 _BOOLS = {"sources_open", "show_tokens", "confirm_delete"}
 _HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+# Versão do formato guardado. Na 2 mudaram as predefinições da cor e do estilo das mensagens:
+# quem ainda tinha as antigas (gravadas junto com o resto) passa para as novas, uma vez.
+_REV = 2
+_OLD_DEFAULTS = {"accent": "#7C5CFF", "message_style": "bubbles"}
 
 
 class SettingsError(ValueError):
@@ -63,14 +70,16 @@ def validate(data: object) -> dict:
 
 
 def contrast_text(accent_hex: str) -> str:
-    """Cor do texto sobre o destaque (preto ou branco), pelo contraste WCAG."""
+    """Cor do texto sobre o destaque: branco se tiver pelo menos 3:1 (AA para texto grande e
+    componentes), senão o que contrastar mais. O frontend faz o mesmo cálculo (theme.js)."""
     def lum(c: int) -> float:
         c = c / 255
         return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
 
     r, g, b = (int(accent_hex[i : i + 2], 16) for i in (1, 3, 5))
     L = 0.2126 * lum(r) + 0.7152 * lum(g) + 0.0722 * lum(b)
-    return "#000000" if (L + 0.05) / 0.05 > 1.05 / (L + 0.05) else "#FFFFFF"
+    white, black = 1.05 / (L + 0.05), (L + 0.05) / 0.05
+    return "#FFFFFF" if white >= 3 or white >= black else "#000000"
 
 
 def _with_derived(data: dict) -> dict:
@@ -81,6 +90,10 @@ def load(db_path) -> dict:
     with connect(db_path) as db:
         row = db.execute("SELECT data_json FROM settings WHERE id=1").fetchone()
     stored = json.loads(row["data_json"]) if row else {}
+    if stored.pop("_rev", 1) < _REV:
+        stored = {k: v for k, v in stored.items() if _OLD_DEFAULTS.get(k) != v}
+        if row:
+            _write(db_path, stored)
     # Valores guardados que deixaram de ser válidos voltam à predefinição.
     merged = dict(DEFAULTS)
     for k, v in stored.items():
@@ -91,18 +104,16 @@ def load(db_path) -> dict:
     return _with_derived(merged)
 
 
-def save(db_path, data: object) -> dict:
-    clean = validate(data)
+def _write(db_path, clean: dict) -> None:
     with connect(db_path) as db:
         db.execute(
             "INSERT INTO settings (id, data_json, updated_at) VALUES (1, ?, ?)"
             " ON CONFLICT(id) DO UPDATE SET data_json=excluded.data_json, updated_at=excluded.updated_at",
-            (json.dumps(clean), utcnow()),
+            (json.dumps({**clean, "_rev": _REV}), utcnow()),
         )
-    return load(db_path)
 
 
-def reset(db_path) -> dict:
-    with connect(db_path) as db:
-        db.execute("DELETE FROM settings WHERE id=1")
+def save(db_path, data: object) -> dict:
+    _write(db_path, validate(data))
     return load(db_path)
+

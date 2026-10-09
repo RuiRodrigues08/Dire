@@ -11,9 +11,15 @@ from functools import cached_property
 from pathlib import Path
 
 from ..core.config import Settings
+from ..core.db import connect
 from .vector_store import VectorStore
 
 _SLUG = re.compile(r"^[a-z0-9_]{1,32}$")
+
+
+def library_scope(library_id: str) -> str:
+    """Valor de `conversation_id` nos metadados dos vetores de uma base de dados."""
+    return f"lib:{library_id}"
 
 
 @dataclass
@@ -39,6 +45,19 @@ class Workspace:
 
     def conversation_dir(self, conversation_id: str) -> Path:
         return self.uploads_dir / conversation_id
+
+    @property
+    def libraries_dir(self) -> Path:
+        return self.root / "libraries"
+
+    def library_dir(self, library_id: str) -> Path:
+        return self.libraries_dir / library_id
+
+    def scopes(self, conversation_id: str) -> list[str]:
+        """Âmbitos dos vetores que a conversa pesquisa: os seus e os da base de dados associada."""
+        with connect(self.db_path) as db:
+            row = db.execute("SELECT library_id FROM conversations WHERE id=?", (conversation_id,)).fetchone()
+        return [conversation_id] + ([library_scope(row["library_id"])] if row and row["library_id"] else [])
 
     @cached_property
     def vectors(self) -> VectorStore:

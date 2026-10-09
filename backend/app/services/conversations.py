@@ -28,6 +28,8 @@ def _conv_dict(row, retention_days: int) -> dict:
         "created_at": row["created_at"],
         "last_activity_at": row["last_activity_at"],
         "days_until_deletion": _days_left(row, retention_days),
+        "library_id": row["library_id"],
+        "n_messages": row["n_messages"] if "n_messages" in row.keys() else None,
     }
 
 
@@ -46,7 +48,8 @@ def create(ws: Workspace, title: str | None = None) -> dict:
 def list_all(ws: Workspace) -> list[dict]:
     with connect(ws.db_path) as db:
         rows = db.execute(
-            "SELECT * FROM conversations ORDER BY pinned DESC, last_activity_at DESC"
+            "SELECT c.*, (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) AS n_messages"
+            " FROM conversations c ORDER BY pinned DESC, last_activity_at DESC"
         ).fetchall()
     return [_conv_dict(r, ws.settings.chat_retention_days) for r in rows]
 
@@ -57,12 +60,19 @@ def get(ws: Workspace, conversation_id: str) -> dict | None:
     return _conv_dict(row, ws.settings.chat_retention_days) if row else None
 
 
-def update(ws: Workspace, conversation_id: str, title: str | None = None, pinned: bool | None = None) -> dict | None:
+_UNSET = object()
+
+
+def update(ws: Workspace, conversation_id: str, title: str | None = None, pinned: bool | None = None,
+           library_id: str | None | object = _UNSET) -> dict | None:
+    """`library_id`: associa a conversa a uma base de dados (None desliga); omitido, não mexe."""
     with connect(ws.db_path) as db:
         if title is not None:
             db.execute("UPDATE conversations SET title=? WHERE id=?", (title.strip()[:TITLE_MAX] or DEFAULT_TITLE, conversation_id))
         if pinned is not None:
             db.execute("UPDATE conversations SET pinned=? WHERE id=?", (int(pinned), conversation_id))
+        if library_id is not _UNSET:
+            db.execute("UPDATE conversations SET library_id=? WHERE id=?", (library_id, conversation_id))
     return get(ws, conversation_id)
 
 
@@ -134,6 +144,16 @@ def save_exchange(ws: Workspace, conversation_id: str, query: str, answer: str,
 
 
 def _auto_title(query: str) -> str:
+    # Pedidos das ferramentas ("Resolver caso prático com base em: a.pdf…\n\n<enunciado>"):
+    # o título fica com o enunciado ou só com o nome da ferramenta, sem a lista de ficheiros.
+    head, _, detail = query.partition("\n\n")
+    if " com base em: " in head:
+        if detail.startswith("Caso: "):      # caso dado como documento: "Caso: enunciado.pdf"
+            query = f"Caso prático: {detail[6:]}"
+        elif detail:
+            query = f"Caso prático: {detail}"
+        else:
+            query = head.split(" com base em: ")[0]
     q = " ".join(query.split())
     return q if len(q) <= TITLE_MAX else q[: TITLE_MAX - 1].rstrip() + "…"
 
@@ -156,6 +176,7 @@ def reconcile(ws: Workspace) -> dict:
     with connect(ws.db_path) as db:
         doc_rows = db.execute("SELECT id, conversation_id, stored_path FROM documents").fetchall()
         conv_ids = {r["id"] for r in db.execute("SELECT id FROM conversations").fetchall()}
+        lib_ids = {r["id"] for r in db.execute("SELECT id FROM libraries").fetchall()}
     known_docs = {r["id"] for r in doc_rows}
     known_files = {r["stored_path"] for r in doc_rows}
 
@@ -164,9 +185,11 @@ def reconcile(ws: Workspace) -> dict:
         ws.vectors.delete_where(doc_id=doc_id)
 
     removed_paths: list[str] = []
-    if ws.uploads_dir.is_dir():
-        for conv_dir in ws.uploads_dir.iterdir():
-            if not conv_dir.is_dir() or conv_dir.name not in conv_ids:
+    for base, owners in ((ws.uploads_dir, conv_ids), (ws.libraries_dir, lib_ids)):
+        if not base.is_dir():
+            continue
+        for conv_dir in base.iterdir():
+            if not conv_dir.is_dir() or conv_dir.name not in owners:
                 shutil.rmtree(conv_dir, ignore_errors=True) if conv_dir.is_dir() else conv_dir.unlink(missing_ok=True)
                 removed_paths.append(str(conv_dir))
                 continue

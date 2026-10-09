@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 from ..core.config import Settings
 from ..core.limits import InferenceQueue
-from ..core.prompts import OVERVIEW_HEADER, REFUSAL, REWRITE_PROMPT, SYSTEM_INSTRUCTIONS, USER_TEMPLATE
+from ..core.prompts import FULL_DOCS_HEADER, OVERVIEW_HEADER, REFUSAL, REWRITE_PROMPT, SYSTEM_INSTRUCTIONS, USER_TEMPLATE
 from .chunking import count_tokens
 from .embeddings import Embedder
 from .llm import Usage
@@ -90,7 +90,12 @@ OVERVIEW_RE = re.compile(
     r"|sec[çc][õo]es|mat[ée]ria|conte[úu]dos?|estrutura|abordad\w*|vis[ãa]o geral"
     r"|topics?|titles?|summar\w*|overview|outline|chapters?|sections|contents)\b"
     r"|\b(do|de|sobre) (o )?que (é que )?(fala|trata|é|se trata)\b"
-    r"|\bwhat (is|are) (this|these|the) \w+ about\b",
+    r"|\bwhat (is|are) (this|these|the) \w+ about\b"
+    # Perguntas de tarefa sobre o documento ("o que tenho de fazer nesta ficha?").
+    r"|\b(fichas?|exerc[íi]cios?|enunciados?|tarefas?|objetivos?|passos|etapas|al[íi]neas)\b"
+    r"|\bo que (é que )?(tenho|temos|tens|preciso|precisamos|devo|devemos|há|ha) (de |que |a )?fazer\b"
+    r"|\b(é|e) (preciso|pedido|para fazer)\b|\bse pede\b"
+    r"|\b(worksheet|assignment|exercises?|tasks?|steps)\b|\bwhat (do|should) (i|we) (have to |need to )?do\b",
     re.IGNORECASE,
 )
 OVERVIEW_SHARE = 0.7  # parte do orçamento do contexto para a estrutura; o resto vai para blocos
@@ -272,7 +277,7 @@ class RagEngine:
         self, ws: Workspace, conversation_id: str, query: str, doc_ids=None, k: int | None = None
     ) -> list[dict]:
         emb = await asyncio.to_thread(self.embedder.embed_query, query)
-        return await asyncio.to_thread(ws.vectors.query, emb, conversation_id, k or self.s.top_k, doc_ids)
+        return await asyncio.to_thread(ws.vectors.query, emb, ws.scopes(conversation_id), k or self.s.top_k, doc_ids)
 
     async def rewrite(self, query: str, history: list[dict], usage: Usage) -> str:
         if not history:
@@ -311,7 +316,7 @@ class RagEngine:
         async def load_all() -> list[dict]:
             nonlocal all_chunks
             if not all_chunks:
-                all_chunks = await asyncio.to_thread(ws.vectors.all_chunks, conversation_id, doc_ids)
+                all_chunks = await asyncio.to_thread(ws.vectors.all_chunks, ws.scopes(conversation_id), doc_ids)
             return all_chunks
 
         # 1. Resposta ao menu de temas ("2 e 5", "services", "tudo"): sem reescrita.
@@ -384,6 +389,15 @@ class RagEngine:
 
     async def _overview(self, result, all_chunks, num_predict, hits=()) -> AsyncIterator[dict]:
         budget = context_budget(result.rewritten_query, self.s.num_ctx, num_predict)
+        ordered = sorted(all_chunks, key=lambda c: (c["source"], c["page_number"]))
+        full_cost = count_tokens(FULL_DOCS_HEADER) + sum(count_tokens(c["chunk_text"]) + 20 for c in ordered)
+        if full_cost <= budget:
+            # Documentos pequenos (ex.: uma ficha) cabem inteiros: o modelo vê todo o texto
+            # pela ordem original, em vez de só os títulos.
+            async for ev in self._generate(result, ordered, FULL_DOCS_HEADER, num_predict, scored=False,
+                                           cite_hits=False, extra_sources=overview_sources(all_chunks)):
+                yield ev
+            return
         outline = OVERVIEW_HEADER + "\n" + build_outline(all_chunks, int(budget * OVERVIEW_SHARE))
         async for ev in self._generate(result, list(hits), outline, num_predict,
                                        extra_sources=overview_sources(all_chunks)):
@@ -391,7 +405,7 @@ class RagEngine:
 
     async def _generate(
         self, result: AnswerResult, hits: list[dict], outline: str, num_predict: int,
-        scored: bool = True, extra_sources: list[dict] | None = None,
+        scored: bool = True, extra_sources: list[dict] | None = None, cite_hits: bool = True,
     ) -> AsyncIterator[dict]:
         q = result.rewritten_query
         reserved = count_tokens(outline) if outline else 0
@@ -418,6 +432,6 @@ class RagEngine:
                 "doc_id": h["doc_id"], "score": round(h["score"], 4) if scored else None,
                 "excerpt": h["chunk_text"][:EXCERPT_CHARS],
             }
-            for h in hits
+            for h in (hits if cite_hits else [])
         ] + (extra_sources or [])
         yield {"type": "sources", "data": result.sources}

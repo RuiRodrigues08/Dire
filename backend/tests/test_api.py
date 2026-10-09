@@ -1,5 +1,4 @@
 import asyncio
-import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -63,7 +62,7 @@ def test_bruteforce_lockout_after_5_failures(app_ctx):  # critério 7
 # ---------- isolamento (critério 1) ----------
 
 def test_profiles_are_isolated(make_app, tmp_path):
-    state, _, public, _ = make_app()
+    state, _, public = make_app()
     with TestClient(public) as rui, TestClient(public) as ana:
         login(rui, "rui")
         login(ana, "namorada")
@@ -175,6 +174,8 @@ def test_overview_question_uses_document_outline(app_ctx, tmp_path):
     context = llm.stream_calls[0][-1]["content"]
     for title in ("Introdução à Aprendizagem Automática", "Overfitting", "Como evitar o overfitting"):
         assert title in context
+    # Documento pequeno: vai inteiro, não só os títulos.
+    assert "DOCUMENTOS COMPLETOS" in context and "regularização L2" in context and "memoriza o ruído" in context
     sources = next(e for e in events if e["type"] == "sources")["data"]
     whole = [s for s in sources if s["score"] is None]
     assert len(whole) == 1 and whole[0]["source"] == "ml.pdf" and whole[0]["page_number"] == 1
@@ -198,6 +199,76 @@ def test_generic_summary_asks_topic_then_summarizes_choice(app_ctx, tmp_path):
     assert "regularização L2" in context and "memoriza o ruído" not in context
     sources = next(e for e in events if e["type"] == "sources")["data"]
     assert [s["section_title"] for s in sources] == ["Como evitar o overfitting"]
+
+
+def _upload(client, cid, tmp_path, name, pages):
+    pdf = make_pdf(tmp_path / name, pages=pages, blank_page=False)
+    r = client.post(f"/api/conversations/{cid}/documents",
+                    files={"file": (name, pdf.read_bytes(), "application/pdf")})
+    assert r.status_code == 201, r.text
+    return r.json()["doc_id"]
+
+
+CASE_PAGES = [
+    ("Caso prático 1", "Enunciado: um modelo tem erro de treino baixo e erro de teste alto."),
+    ("Resolução", "Identificação: overfitting. Regra aplicável: regularização L2. Conclusão: aplicar L2."),
+]
+
+
+def test_model_answer_analyses_each_document_once(app_ctx, tmp_path):
+    _, llm, client = app_ctx
+    login(client, "rui")
+    conv, first = new_conv_with_pdf(client, tmp_path)
+    other = _upload(client, conv["id"], tmp_path, "caso1.pdf", CASE_PAGES)
+    ids = [first["doc_id"], other]
+
+    r = client.post(f"/api/conversations/{conv['id']}/model-answer", json={"doc_ids": ids})
+    events = read_ndjson(r)
+    progress = [e["message"] for e in events if e["type"] == "progress"]
+    assert any("ml.pdf (1/2)" in m for m in progress) and any("caso1.pdf (2/2)" in m for m in progress)
+    assert len(llm.rewrite_calls) == 2           # uma análise por documento (sem streaming)
+    assert len(llm.stream_calls) == 1            # a resposta-modelo (em streaming)
+    assert "Resolução 1: ml.pdf" in llm.stream_calls[0][-1]["content"]
+    assert events[-1]["type"] == "done" and answer_text(events)
+    sources = next(e for e in events if e["type"] == "sources")["data"]
+    assert {s["source"] for s in sources} == {"ml.pdf", "caso1.pdf"}
+
+    # Segunda vez com os mesmos documentos: vem da cache, sem chamar o LLM.
+    events = read_ndjson(client.post(f"/api/conversations/{conv['id']}/model-answer", json={"doc_ids": ids[::-1]}))
+    assert len(llm.rewrite_calls) == 2 and len(llm.stream_calls) == 1
+    assert events[-1]["type"] == "done"
+    msgs = client.get(f"/api/conversations/{conv['id']}/messages").json()
+    assert msgs[0]["content"].startswith("Criar resposta-modelo com base em: ml.pdf, caso1.pdf")
+
+
+def test_solve_case_uses_template_excerpts_and_case(app_ctx, tmp_path):
+    _, llm, client = app_ctx
+    login(client, "rui")
+    conv, first = new_conv_with_pdf(client, tmp_path)
+    case_id = _upload(client, conv["id"], tmp_path, "caso1.pdf", CASE_PAGES)
+    new_case = "Um modelo memoriza o ruído do conjunto de treino. Como evitar o overfitting?"
+
+    r = client.post(f"/api/conversations/{conv['id']}/solve",
+                    json={"doc_ids": [first["doc_id"], case_id], "case_text": new_case})
+    events = read_ndjson(r)
+    assert events[-1]["type"] == "done", events
+    prompt = llm.stream_calls[-1][-1]["content"]
+    assert "RESPOSTA-MODELO:" in prompt and new_case in prompt and "EXCERTOS" in prompt
+    assert "regularização L2" in prompt          # excerto relevante dos documentos de referência
+    sources = next(e for e in events if e["type"] == "sources")["data"]
+    assert sources and all(s["score"] is not None for s in sources)
+
+    # O caso pode ser um documento carregado; não conta como referência.
+    events = read_ndjson(client.post(f"/api/conversations/{conv['id']}/solve",
+                                     json={"doc_ids": [first["doc_id"], case_id], "case_doc_id": case_id}))
+    assert events[-1]["type"] == "done"
+    assert "Enunciado: um modelo tem erro de treino baixo" in llm.stream_calls[-1][-1]["content"]
+
+    # Validações
+    url = f"/api/conversations/{conv['id']}/solve"
+    assert client.post(url, json={"doc_ids": [first["doc_id"]]}).status_code == 400
+    assert client.post(url, json={"doc_ids": [case_id], "case_doc_id": case_id}).status_code == 400
+    assert client.post(url, json={"doc_ids": ["nao-existe"], "case_text": "x"}).status_code == 400
 
 
 def test_answer_with_sources_and_followup_rewrite(app_ctx, tmp_path):
@@ -284,7 +355,7 @@ def test_failed_indexing_leaves_no_vectors_or_file(make_app, tmp_path):
         def embed_documents(self, texts):
             raise RuntimeError("falha simulada")
 
-    state, _, public, _ = make_app(embedder=Broken())
+    state, _, public = make_app(embedder=Broken())
     with TestClient(public, raise_server_exceptions=False) as client:
         login(client, "rui")
         cid = client.post("/api/conversations", json={}).json()["id"]
@@ -300,7 +371,7 @@ def test_failed_indexing_leaves_no_vectors_or_file(make_app, tmp_path):
 # ---------- fila (critério 11) ----------
 
 def test_concurrent_requests_queue_with_position(make_app, tmp_path):
-    state, llm, public, _ = make_app(llm=FakeLLM(delay=0.02))
+    state, llm, public = make_app(llm=FakeLLM(delay=0.02))
     with TestClient(public) as client:
         login(client, "rui")
         conv, _ = new_conv_with_pdf(client, tmp_path)
@@ -326,7 +397,7 @@ def test_concurrent_requests_queue_with_position(make_app, tmp_path):
 @pytest.fixture
 def https_ctx(make_app):
     # O túnel serve HTTPS ao browser; o cookie remoto é `Secure`.
-    state, llm, public, _ = make_app()
+    state, llm, public = make_app()
     with TestClient(public, base_url="https://testserver") as client:
         yield state, llm, client
 
@@ -375,7 +446,7 @@ def test_local_cookie_rejected_through_tunnel_and_token_limit(https_ctx, tmp_pat
 # ---------- definições (critérios 12 e 13, parte da API) ----------
 
 def test_settings_per_profile_and_validation(make_app):
-    _, _, public, _ = make_app()
+    _, _, public = make_app()
     with TestClient(public) as rui, TestClient(public) as ana:
         login(rui, "rui")
         login(ana, "namorada")
@@ -387,7 +458,6 @@ def test_settings_per_profile_and_validation(make_app):
         for bad in ({"accent": "red; background:url(x)"}, {"css": "body{}"}, {"theme": "neon"},
                     {"show_tokens": "yes"}, ["theme"]):
             assert rui.put("/api/settings", json=bad).status_code == 400
-        assert rui.delete("/api/settings").json()["theme"] == "system"
 
 
 def test_csrf_content_type_and_security_headers(app_ctx):
@@ -401,17 +471,209 @@ def test_csrf_content_type_and_security_headers(app_ctx):
     assert client.get("/docs").status_code == 404 and client.get("/openapi.json").status_code == 404
 
 
-def test_admin_app_rejects_tunnel_requests(make_app):
-    state, _, _, admin = make_app()
-    with TestClient(admin) as c:
-        assert c.get("/admin/share/status").json()["state"] == "inativo"
-        assert c.get("/admin/share/status", headers=CF).status_code == 403
-
-
-def test_export_markdown(app_ctx, tmp_path):
+def test_export_pdf(app_ctx, tmp_path):
     _, _, client = app_ctx
     login(client, "rui")
     conv, _ = new_conv_with_pdf(client, tmp_path)
     ask(client, conv["id"], "O que é overfitting?")
-    md = client.get(f"/api/conversations/{conv['id']}/export").text
-    assert "**Pergunta:**" in md and "- ml.pdf, Pág. 2" in md
+    import pymupdf
+
+    def pdf_text(url):
+        r = client.get(url)
+        assert r.headers["content-type"] == "application/pdf" and r.content.startswith(b"%PDF-")
+        return "".join(p.get_text(flags=pymupdf.TEXT_PRESERVE_WHITESPACE) for p in pymupdf.open("pdf", r.content))  # sem ligaduras (ﬁ)
+
+    text = pdf_text(f"/api/conversations/{conv['id']}/export")
+    assert "O que é overfitting?" in text and "Fontes: ml.pdf, Pág. 2" in text
+
+    # só algumas perguntas (cada uma com a sua resposta)
+    ask(client, conv["id"], "Como se evita?")
+    msgs = client.get(f"/api/conversations/{conv['id']}/messages").json()
+    second_q = [m for m in msgs if m["role"] == "user"][1]
+    part = pdf_text(f"/api/conversations/{conv['id']}/export?ids={second_q['id']}")
+    assert "Como se evita?" in part and part.count("DIRE") == 1
+
+
+# ---------- bases de dados ----------
+
+def test_library_attached_to_conversation_is_searched(app_ctx, tmp_path):
+    state, _, client = app_ctx
+    login(client, "rui")
+    lib = client.post("/api/libraries", json={"name": "  Machine   Learning "}).json()
+    assert lib["name"] == "Machine Learning" and lib["n_documents"] == 0
+    pdf = make_pdf(tmp_path / "ml.pdf")
+    r = client.post(f"/api/libraries/{lib['id']}/documents", files={"file": ("ml.pdf", pdf.read_bytes(), "application/pdf")})
+    assert r.status_code == 201, r.text
+    doc_id = r.json()["doc_id"]
+
+    conv = client.post("/api/conversations", json={}).json()
+    assert conv["library_id"] is None
+    # sem base associada, a conversa não vê os ficheiros dela
+    _, events = ask(client, conv["id"], "O que é overfitting?")
+    assert answer_text(events).startswith(REFUSAL)
+
+    c = client.patch(f"/api/conversations/{conv['id']}", json={"library_id": lib["id"]}).json()
+    assert c["library_id"] == lib["id"]
+    docs = client.get(f"/api/conversations/{conv['id']}/documents").json()
+    assert [(d["id"], d["library"]) for d in docs] == [(doc_id, "Machine Learning")]
+    _, events = ask(client, conv["id"], "O que é overfitting?")
+    assert answer_text(events) == ANSWER + " "
+    # os da base não se apagam a partir da conversa
+    assert client.delete(f"/api/conversations/{conv['id']}/documents/{doc_id}").status_code == 404
+    # mudar o título não mexe na base associada
+    assert client.patch(f"/api/conversations/{conv['id']}", json={"title": "x"}).json()["library_id"] == lib["id"]
+    lib_info = client.get("/api/libraries").json()[0]
+    assert lib_info["n_conversations"] == 1
+    assert lib_info["associated"] == [{"id": conv["id"], "title": "x"}]
+    assert lib_info["used"] == [{"id": conv["id"], "title": "x"}]  # houve uma resposta com fontes da base
+    # pergunta sem fontes da base (recusa), noutra conversa associada: também conta como "usada"
+    other = client.post("/api/conversations", json={"title": "outra"}).json()
+    client.patch(f"/api/conversations/{other['id']}", json={"library_id": lib["id"]})
+    ask(client, other["id"], "Qual é a capital da Mongólia?")
+    client.patch(f"/api/conversations/{other['id']}", json={"library_id": None})
+    assert {c["id"] for c in client.get("/api/libraries").json()[0]["used"]} == {conv["id"], other["id"]}
+    # desassociar: deixa de estar associada, mas continua a constar como "usada"
+    client.patch(f"/api/conversations/{conv['id']}", json={"library_id": None})
+    lib_info = client.get("/api/libraries").json()[0]
+    assert lib_info["associated"] == [] and conv["id"] in [c["id"] for c in lib_info["used"]]
+    hits = client.get(f"/api/libraries/{lib['id']}/search", params={"q": "overfitting regularização"}).json()
+    assert hits and hits[0]["filename"] == "ml.pdf" and "page_number" in hits[0] and hits[0]["snippet"]
+    assert client.get(f"/api/libraries/{lib['id']}/search", params={"q": "a"}).json() == []
+    client.patch(f"/api/conversations/{conv['id']}", json={"library_id": lib["id"]})
+
+    ws = state.workspace("rui")
+    assert client.delete(f"/api/libraries/{lib['id']}").json() == {"ok": True}
+    assert ws.vectors.count() == 0
+    assert not ws.library_dir(lib["id"]).exists()
+    assert {c["library_id"] for c in client.get("/api/conversations").json()} == {None}
+    from app.services.conversations import reconcile
+    assert reconcile(ws) == {"orphan_vectors": [], "removed_paths": []}
+
+
+def test_libraries_are_per_profile_and_validated(make_app):
+    _, _, public = make_app()
+    with TestClient(public) as a, TestClient(public) as b:
+        login(a, "rui")
+        login(b, "namorada")
+        lib = a.post("/api/libraries", json={"name": "Direito"}).json()
+        assert b.get("/api/libraries").json() == []
+        assert b.delete(f"/api/libraries/{lib['id']}").status_code == 404
+        conv = b.post("/api/conversations", json={}).json()
+        assert b.patch(f"/api/conversations/{conv['id']}", json={"library_id": lib["id"]}).status_code == 404
+        assert a.post("/api/libraries", json={"name": "   "}).status_code == 400
+
+
+def test_old_database_is_migrated(tmp_path):
+    from app.core import db as dbmod
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript("""
+        CREATE TABLE conversations (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT 'Nova conversa',
+          pinned INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, last_activity_at TEXT NOT NULL);
+        CREATE TABLE documents (id TEXT PRIMARY KEY,
+          conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+          filename TEXT NOT NULL, file_type TEXT NOT NULL, sha256 TEXT NOT NULL, n_chunks INTEGER NOT NULL,
+          stored_path TEXT NOT NULL, uploaded_at TEXT NOT NULL);
+        CREATE TABLE doc_analyses (doc_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (doc_id, kind));
+        INSERT INTO conversations VALUES ('c1', 't', 0, 'x', 'x');
+        INSERT INTO documents VALUES ('d1', 'c1', 'a.pdf', 'pdf', 'h', 3, 'uploads/c1/d1.pdf', 'x');
+        INSERT INTO doc_analyses VALUES ('d1', 'structure', '{}', 'x');
+    """)
+    old.commit()
+    old.close()
+    with dbmod.connect(path) as db:
+        assert db.execute("SELECT library_id FROM conversations").fetchone()[0] is None
+        assert db.execute("SELECT conversation_id, library_id FROM documents").fetchone()[:] == ("c1", None)
+        assert db.execute("SELECT COUNT(*) FROM doc_analyses").fetchone()[0] == 1
+        db.execute("DELETE FROM conversations WHERE id='c1'")
+        assert db.execute("SELECT COUNT(*) FROM doc_analyses").fetchone()[0] == 0  # cascata continua a funcionar
+
+
+# ---------- imagens do perfil ----------
+
+def _png(w=40, h=20, color=(200, 30, 30)):
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (w, h), color).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_profile_media_upload_reencode_and_isolation(make_app):
+    _, _, public = make_app()
+    with TestClient(public) as a, TestClient(public) as b:
+        login(a, "rui")
+        login(b, "namorada")
+        assert a.get("/api/session").json()["media"] == {"avatar": None, "chat_bg": None, "login_bg": None}
+        r = a.put("/api/profile/media/avatar", files={"file": ("eu.png", _png(), "image/png")})
+        assert r.status_code == 200, r.text
+        assert r.json()["avatar"] is not None
+        img = a.get("/api/profile/media/avatar")
+        from PIL import Image
+        import io
+        assert img.headers["content-type"] == "image/png"
+        assert Image.open(io.BytesIO(img.content)).size == (256, 256)  # recortada ao quadrado
+        assert b.get("/api/profile/media/avatar").status_code == 404  # cada perfil tem as suas
+        bad = a.put("/api/profile/media/chat_bg", files={"file": ("x.png", b"<svg onload=alert(1)>", "image/png")})
+        assert bad.status_code == 415
+        assert a.put("/api/profile/media/outra", files={"file": ("x.png", _png(), "image/png")}).status_code == 404
+        assert a.delete("/api/profile/media/avatar").json()["avatar"] is None
+
+
+# ---------- partilha por link ----------
+
+def test_share_start_status_accounts_and_stop(make_app, tmp_path, monkeypatch):
+    fake = tmp_path / "cloudflared"
+    fake.write_text("#!/bin/sh\necho 'INF |  https://lontra-cometa.trycloudflare.com  |' >&2\nexec sleep 60\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("CLOUDFLARED_BIN", str(fake))
+    monkeypatch.setenv("ADMIN_PROFILE", "rui")
+    state, _, public = make_app()
+    with TestClient(public) as a, TestClient(public) as b:
+        login(a, "rui")
+        info = a.get("/api/share").json()
+        assert info["active"] is False and info["available"] is True
+        assert {x["profile"]: x["online"] for x in info["accounts"]} == {"rui": True, "namorada": False}
+        login(b, "namorada")
+        assert {x["profile"]: x["local"] for x in a.get("/api/share").json()["accounts"]} == {"rui": 1, "namorada": 1}
+        # só o administrador gere a partilha
+        assert a.get("/api/session").json()["is_admin"] is True
+        assert b.get("/api/session").json()["is_admin"] is False
+        assert b.get("/api/share").status_code == 403
+        assert b.post("/api/share/start", json={"minutes": 30}).status_code == 403
+
+        r = a.post("/api/share/start", json={"minutes": 30, "max_questions": 5})
+        assert r.status_code == 200, r.text
+        info = r.json()
+        assert info["active"] and info["url"] == "https://lontra-cometa.trycloudflare.com"
+        assert info["max_questions"] == 5 and state.share.is_active()
+        assert a.post("/api/share/start", json={"minutes": 30}).status_code == 409
+        before = info["expires_at"]
+        assert a.post("/api/share/extend", json={"minutes": 15}).json()["expires_at"] == before + 900
+
+        # pelo túnel não se gere a partilha
+        remote = TestClient(public, base_url="https://x.trycloudflare.com")
+        r = remote.post("/api/auth/login", json={"code": CODES["namorada"]}, headers=CF)
+        assert r.status_code == 200
+        assert remote.get("/api/share", headers=CF).status_code == 403
+        assert {x["profile"]: x["remote"] for x in a.get("/api/share").json()["accounts"]}["namorada"] == 1
+
+        a.post("/api/share/stop")
+        info = a.post("/api/share/start", json={"minutes": None}).json()  # até parar
+        assert info["active"] and info["expires_at"] is None
+        assert a.get("/api/session").json()["share_expires_at"] is None
+        info = a.post("/api/share/stop").json()
+        assert info["active"] is False and info["url"] is None and not state.share.is_active()
+        assert remote.get("/api/session", headers=CF).status_code == 401  # sessão remota morreu
+
+
+def test_share_without_cloudflared_explains(make_app, monkeypatch):
+    monkeypatch.setenv("CLOUDFLARED_BIN", "/nao/existe/cloudflared")
+    monkeypatch.setenv("ADMIN_PROFILE", "rui")
+    _, _, public = make_app()
+    with TestClient(public) as a:
+        login(a, "rui")
+        assert a.get("/api/share").json()["available"] is False
+        r = a.post("/api/share/start", json={"minutes": 30})
+        assert r.status_code == 503 and "cloudflared" in r.json()["detail"]

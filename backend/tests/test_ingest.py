@@ -72,7 +72,9 @@ def test_overview_detection_and_outline_budget():
     from app.services.rag_engine import build_outline, is_overview_question
 
     for q in ("Quais os temas abordados?", "Quais são os títulos?", "Faz um resumo",
-              "Do que fala este documento?", "What topics are covered?"):
+              "Do que fala este documento?", "What topics are covered?",
+              "O que tenho que fazer para esta ficha?", "O que é pedido?", "Quais são os passos?",
+              "What do I have to do?"):
         assert is_overview_question(q), q
     for q in ("O que é overfitting?", "Como se evita o sobreajuste?", "Qual é a capital de França?"):
         assert not is_overview_question(q), q

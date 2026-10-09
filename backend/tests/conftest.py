@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
 
 import pytest
@@ -23,7 +22,7 @@ class FakeLLM:
         self.rewrite_calls: list[str] = []
         self.stream_calls: list[list[dict]] = []
 
-    async def complete(self, messages, num_predict):
+    async def complete(self, messages, num_predict, num_ctx=None):
         prompt = messages[-1]["content"]
         self.rewrite_calls.append(prompt)
         query = prompt.split("NOVA PERGUNTA:")[-1].strip()
@@ -31,7 +30,7 @@ class FakeLLM:
             return "Como se evita o overfitting?", Usage(40, 8)
         return query, Usage(30, 5)
 
-    async def stream(self, messages, num_predict, usage):
+    async def stream(self, messages, num_predict, usage, num_ctx=None):
         self.stream_calls.append(messages)
         for word in ANSWER.split(" "):
             if self.delay:
@@ -62,20 +61,20 @@ def env(tmp_path, monkeypatch):
 def make_app(env):
     from app.core.config import load_settings
     from app.core.state import build_state
-    from app.main import create_admin_app, create_public_app
+    from app.main import create_public_app
     from app.services.embeddings import HashEmbedder
 
     def _make(llm=None, embedder=None):
         llm = llm or FakeLLM()
         state = build_state(load_settings(), llm=llm, embedder=embedder or HashEmbedder())
-        return state, llm, create_public_app(state, background=False), create_admin_app(state)
+        return state, llm, create_public_app(state, background=False)
 
     return _make
 
 
 @pytest.fixture
 def app_ctx(make_app):
-    state, llm, public, admin = make_app()
+    state, llm, public = make_app()
     with TestClient(public) as client:
         yield state, llm, client
 

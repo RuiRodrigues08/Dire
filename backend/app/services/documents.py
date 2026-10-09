@@ -1,4 +1,8 @@
-"""Upload e indexação de documentos dentro de uma conversa (blueprint 4)."""
+"""Upload e indexação de documentos de uma conversa ou de uma base de dados (blueprint 4).
+
+Uma base de dados é um conjunto de ficheiros que se associa a conversas: os vetores dela
+ficam com `conversation_id = "lib:<id>"` e a conversa associada pesquisa nos dois âmbitos.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -11,7 +15,7 @@ from .chunking import ParseResult, normalize
 from .embeddings import Embedder
 from .ingest_pdf import parse_pdf
 from .ingest_ppt import parse_pptx
-from .workspace import Workspace
+from .workspace import Workspace, library_scope
 
 
 class IngestError(Exception):
@@ -35,16 +39,43 @@ def _detect_type(filename: str, head: bytes) -> str:
 
 
 def list_documents(ws: Workspace, conversation_id: str) -> list[dict]:
+    """Documentos que a conversa usa: os seus e, a seguir, os da base de dados associada
+    (estes com `library` = nome da base; só se gerem na própria base)."""
     with connect(ws.db_path) as db:
         rows = db.execute(
-            "SELECT id, filename, file_type, n_chunks, uploaded_at FROM documents"
+            "SELECT id, filename, file_type, n_chunks, uploaded_at, NULL AS library FROM documents"
             " WHERE conversation_id=? ORDER BY uploaded_at", (conversation_id,)
+        ).fetchall()
+        rows += db.execute(
+            "SELECT d.id, d.filename, d.file_type, d.n_chunks, d.uploaded_at, l.name AS library"
+            " FROM documents d JOIN libraries l ON l.id = d.library_id"
+            " JOIN conversations c ON c.library_id = l.id WHERE c.id=? ORDER BY d.uploaded_at",
+            (conversation_id,),
         ).fetchall()
     return [dict(r) for r in rows]
 
 
-def ingest(ws: Workspace, embedder: Embedder, conversation_id: str, filename: str, data: bytes) -> dict:
+def list_library_documents(ws: Workspace, library_id: str) -> list[dict]:
+    with connect(ws.db_path) as db:
+        rows = db.execute(
+            "SELECT id, filename, file_type, n_chunks, uploaded_at FROM documents"
+            " WHERE library_id=? ORDER BY uploaded_at", (library_id,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def ingest(ws: Workspace, embedder: Embedder, conversation_id: str | None, filename: str, data: bytes,
+           library_id: str | None = None) -> dict:
+    """Indexa um ficheiro numa conversa ou, com `library_id`, numa base de dados."""
     s = ws.settings
+    if library_id:
+        owner_col, owner_id, max_files = "library_id", library_id, s.max_files_per_library
+        scope, where = library_scope(library_id), "nesta base de dados"
+        target_dir = ws.library_dir(library_id)
+    else:
+        owner_col, owner_id, max_files = "conversation_id", conversation_id, s.max_files_per_conversation
+        scope, where = conversation_id, "nesta conversa"
+        target_dir = ws.conversation_dir(conversation_id)
     filename = Path(filename or "documento").name[:200]
     if len(data) == 0:
         raise IngestError("O ficheiro está vazio.")
@@ -55,21 +86,20 @@ def ingest(ws: Workspace, embedder: Embedder, conversation_id: str, filename: st
 
     with connect(ws.db_path) as db:
         existing = db.execute(
-            "SELECT id, filename FROM documents WHERE conversation_id=? AND sha256=?", (conversation_id, sha)
+            f"SELECT id, filename FROM documents WHERE {owner_col}=? AND sha256=?", (owner_id, sha)
         ).fetchone()
         n_docs = db.execute(
-            "SELECT COUNT(*) FROM documents WHERE conversation_id=?", (conversation_id,)
+            f"SELECT COUNT(*) FROM documents WHERE {owner_col}=?", (owner_id,)
         ).fetchone()[0]
     if existing:
         return {"duplicate": True, "doc_id": existing["id"], "filename": existing["filename"],
-                "warnings": [f"Este ficheiro já foi carregado nesta conversa ({existing['filename']}); não foi reindexado."]}
-    if n_docs >= s.max_files_per_conversation:
-        raise IngestError(f"Máximo de {s.max_files_per_conversation} ficheiros por conversa.", 409)
+                "warnings": [f"Este ficheiro já foi carregado {where} ({existing['filename']}); não foi reindexado."]}
+    if n_docs >= max_files:
+        raise IngestError(f"Máximo de {max_files} ficheiros {'por base de dados' if library_id else 'por conversa'}.", 409)
 
     doc_id = str(uuid.uuid4())
-    conv_dir = ws.conversation_dir(conversation_id)
-    conv_dir.mkdir(parents=True, exist_ok=True)
-    stored = conv_dir / f"{doc_id}.{file_type}"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    stored = target_dir / f"{doc_id}.{file_type}"
     stored.write_bytes(data)
 
     try:
@@ -83,7 +113,7 @@ def ingest(ws: Workspace, embedder: Embedder, conversation_id: str, filename: st
             m = {
                 "source": filename, "file_type": file_type, "page_number": c.page_number,
                 "section_title": c.section_title or "", "chunk_text": text,
-                "doc_id": doc_id, "conversation_id": conversation_id,
+                "doc_id": doc_id, "conversation_id": scope,
             }
             if c.page_end:
                 m["page_end"] = c.page_end
@@ -94,9 +124,9 @@ def ingest(ws: Workspace, embedder: Embedder, conversation_id: str, filename: st
         )
         with connect(ws.db_path) as db:
             db.execute(
-                "INSERT INTO documents (id, conversation_id, filename, file_type, sha256, n_chunks, stored_path, uploaded_at)"
-                " VALUES (?,?,?,?,?,?,?,?)",
-                (doc_id, conversation_id, filename, file_type, sha, len(texts),
+                "INSERT INTO documents (id, conversation_id, library_id, filename, file_type, sha256, n_chunks,"
+                " stored_path, uploaded_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                (doc_id, None if library_id else conversation_id, library_id, filename, file_type, sha, len(texts),
                  str(stored.relative_to(ws.root)), utcnow()),
             )
     except BaseException as exc:
@@ -128,10 +158,13 @@ def _parse(path: Path, file_type: str, s) -> ParseResult:
         raise IngestError(f"PDF inválido ou corrompido: {exc}", 422) from exc
 
 
-def delete_document(ws: Workspace, conversation_id: str, doc_id: str) -> bool:
+def delete_document(ws: Workspace, conversation_id: str | None, doc_id: str, library_id: str | None = None) -> bool:
+    """Apaga um documento da conversa (ou, com `library_id`, da base de dados).
+    Os da base associada não se apagam a partir da conversa."""
+    owner_col, owner_id = ("library_id", library_id) if library_id else ("conversation_id", conversation_id)
     with connect(ws.db_path) as db:
         row = db.execute(
-            "SELECT stored_path FROM documents WHERE id=? AND conversation_id=?", (doc_id, conversation_id)
+            f"SELECT stored_path FROM documents WHERE id=? AND {owner_col}=?", (doc_id, owner_id)
         ).fetchone()
     if not row:
         return False

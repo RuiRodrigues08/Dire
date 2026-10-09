@@ -32,8 +32,15 @@ class VectorStore:
                 metadatas=metadatas[i : i + batch],
             )
 
-    def query(self, embedding, conversation_id: str, k: int, doc_ids: list[str] | None = None):
-        where: dict = {"conversation_id": conversation_id}
+    @staticmethod
+    def _scope(scopes: str | list[str]) -> dict:
+        """`scopes`: uma conversa, ou a conversa e a base de dados associada (ver Workspace.scopes)."""
+        if isinstance(scopes, str) or len(scopes) == 1:
+            return {"conversation_id": scopes if isinstance(scopes, str) else scopes[0]}
+        return {"conversation_id": {"$in": list(scopes)}}
+
+    def query(self, embedding, scopes: str | list[str], k: int, doc_ids: list[str] | None = None):
+        where: dict = self._scope(scopes)
         if doc_ids:
             where = {"$and": [where, {"doc_id": {"$in": list(doc_ids)}}]}
         res = self.collection.query(
@@ -45,9 +52,9 @@ class VectorStore:
             hits.append({**meta, "chunk_text": meta.get("chunk_text") or doc, "score": 1.0 - dist})
         return hits
 
-    def all_chunks(self, conversation_id: str, doc_ids: list[str] | None = None) -> list[dict]:
+    def all_chunks(self, scopes: str | list[str], doc_ids: list[str] | None = None) -> list[dict]:
         """Todos os blocos da conversa (sem ordem garantida), para perguntas sobre o documento inteiro."""
-        where: dict = {"conversation_id": conversation_id}
+        where: dict = self._scope(scopes)
         if doc_ids:
             where = {"$and": [where, {"doc_id": {"$in": list(doc_ids)}}]}
         res = self.collection.get(where=where, include=["metadatas", "documents"])
