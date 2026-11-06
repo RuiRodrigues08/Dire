@@ -89,6 +89,10 @@ class Session:
     remote: bool
     expires_at: float
     share_epoch: int = 0
+    device: str | None = None  # chave do dispositivo (só em sessões remotas)
+    ip: str = ""
+    agent: str = ""
+    created_at: float = 0.0
 
 
 class SessionManager:
@@ -108,14 +112,15 @@ class SessionManager:
         self._sessions: dict[str, Session] = {}
         self._lock = threading.Lock()
 
-    def create(self, profile: str, remote: bool) -> tuple[Session, str]:
+    def create(self, profile: str, remote: bool, device: str | None = None, ip: str = "",
+               agent: str = "") -> tuple[Session, str]:
         now = time.time()
         if remote:
             budget = self.share.budget
             exp = min(now + self.remote_seconds, budget.expires_at if budget else now)
         else:
             exp = now + self.local_seconds
-        sess = Session(secrets.token_urlsafe(24), profile, remote, exp, self.share.epoch)
+        sess = Session(secrets.token_urlsafe(24), profile, remote, exp, self.share.epoch, device, ip, agent, now)
         with self._lock:
             self._purge(now)
             self._sessions[sess.sid] = sess
@@ -154,6 +159,13 @@ class SessionManager:
             for sid in remote:
                 del self._sessions[sid]
         return len(remote)
+
+    def revoke_device(self, device: str) -> int:
+        with self._lock:
+            ids = [sid for sid, s in self._sessions.items() if s.device == device]
+            for sid in ids:
+                del self._sessions[sid]
+        return len(ids)
 
     def active(self) -> list[Session]:
         with self._lock:

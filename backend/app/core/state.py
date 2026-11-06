@@ -9,6 +9,7 @@ from ..services.share_manager import ShareManager
 from ..services.workspace import Workspace
 from .auth import LoginLimiter, ProfileRegistry, SessionManager
 from .config import Settings
+from .devices import DeviceStore
 from .limits import InferenceQueue, ShareState
 
 
@@ -24,6 +25,7 @@ class AppState:
     tools: CaseTools
     embedder: object
     share_manager: ShareManager
+    devices: DeviceStore
     _workspaces: dict = field(default_factory=dict)
 
     def workspace(self, profile: str) -> Workspace:
@@ -54,4 +56,5 @@ def build_state(settings: Settings, llm=None, embedder=None) -> AppState:
         tools=CaseTools(settings, llm, embedder, queue),
         embedder=embedder,
         share_manager=ShareManager(share, sessions, settings.public_port, settings.cloudflared_bin),
+        devices=DeviceStore(settings.data_dir / "devices.json", settings.device_approval),
     )

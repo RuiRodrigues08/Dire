@@ -59,10 +59,11 @@ export function useDocumentActions({ conversationId, onChanged, setExcluded }) {
           onChanged(cid)
         } catch (e) {
           set({ status: 'error', message: e.message })
+          toast(`${files[i].name}: ${e.message}`, 'error')
         }
       }
     },
-    [conversationId, onChanged],
+    [conversationId, onChanged, toast],
   )
 
   const remove = useCallback(
@@ -131,7 +132,7 @@ export function useFileDrop(onFiles, enabled = true) {
           e.preventDefault()
           depth.current = 0
           setOver(false)
-          onFiles(e.dataTransfer.files)
+          onFiles([...e.dataTransfer.files])
         },
       }
     : {}
@@ -147,8 +148,10 @@ export function FilePicker({ inputRef, onFiles }) {
       multiple
       hidden
       onChange={(e) => {
-        onFiles(e.target.files)
+        // Copiar antes de limpar: a FileList é viva e esvazia-se com `value = ''` (sobretudo no telemóvel).
+        const picked = [...e.target.files]
         e.target.value = ''
+        if (picked.length) onFiles(picked)
       }}
     />
   )

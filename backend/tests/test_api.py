@@ -77,8 +77,9 @@ def test_profiles_are_isolated(make_app, tmp_path):
         assert ana.delete(f"/api/conversations/{cid}").status_code == 404
         # mesmo com uma conversa própria, os vetores do Rui não aparecem
         own = ana.post("/api/conversations", json={}).json()
-        _, events = ask(ana, own["id"], "O que é overfitting?")
-        assert answer_text(events) == REFUSAL
+        # sem ficheiros nem base associada, não se pode perguntar
+        r = ana.post(f"/api/conversations/{own['id']}/chat", json={"query": "O que é overfitting?"})
+        assert r.status_code == 400
         # o Rui continua com tudo
         assert len(rui.get(f"/api/conversations/{cid}/documents").json()) == 1
         assert state.workspace("namorada").vectors.count() == 0
@@ -450,11 +451,11 @@ def test_settings_per_profile_and_validation(make_app):
     with TestClient(public) as rui, TestClient(public) as ana:
         login(rui, "rui")
         login(ana, "namorada")
-        assert rui.get("/api/settings").json()["theme"] == "system"
-        r = rui.put("/api/settings", json={"theme": "dark", "accent": "#ffcc00", "show_tokens": True})
-        assert r.status_code == 200 and r.json()["accent"] == "#FFCC00" and r.json()["accent_text"] == "#000000"
         assert rui.get("/api/settings").json()["theme"] == "dark"
-        assert ana.get("/api/settings").json()["theme"] == "system"
+        r = rui.put("/api/settings", json={"theme": "light", "accent": "#ffcc00", "show_tokens": True})
+        assert r.status_code == 200 and r.json()["accent"] == "#FFCC00" and r.json()["accent_text"] == "#000000"
+        assert rui.get("/api/settings").json()["theme"] == "light"
+        assert ana.get("/api/settings").json()["theme"] == "dark"
         for bad in ({"accent": "red; background:url(x)"}, {"css": "body{}"}, {"theme": "neon"},
                     {"show_tokens": "yes"}, ["theme"]):
             assert rui.put("/api/settings", json=bad).status_code == 400
@@ -508,9 +509,9 @@ def test_library_attached_to_conversation_is_searched(app_ctx, tmp_path):
 
     conv = client.post("/api/conversations", json={}).json()
     assert conv["library_id"] is None
-    # sem base associada, a conversa não vê os ficheiros dela
-    _, events = ask(client, conv["id"], "O que é overfitting?")
-    assert answer_text(events).startswith(REFUSAL)
+    # sem ficheiros nem base associada, não se pode perguntar
+    r = client.post(f"/api/conversations/{conv['id']}/chat", json={"query": "O que é overfitting?"})
+    assert r.status_code == 400
 
     c = client.patch(f"/api/conversations/{conv['id']}", json={"library_id": lib["id"]}).json()
     assert c["library_id"] == lib["id"]
@@ -677,3 +678,54 @@ def test_share_without_cloudflared_explains(make_app, monkeypatch):
         assert a.get("/api/share").json()["available"] is False
         r = a.post("/api/share/start", json={"minutes": 30})
         assert r.status_code == 503 and "cloudflared" in r.json()["detail"]
+
+
+# ---------- dispositivos do link ----------
+
+def test_remote_devices_approval_block_and_history(make_app, monkeypatch):
+    monkeypatch.setenv("DEVICE_APPROVAL", "1")
+    monkeypatch.setenv("ADMIN_PROFILE", "rui")
+    state, _, public = make_app()
+    ua = {"user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17) Safari/605.1"}
+    with TestClient(public, base_url="https://testserver") as admin, TestClient(public, base_url="https://testserver") as phone:
+        login(admin, "rui")
+        state.share.start(120)
+        # código certo mas dispositivo novo: fica pendente
+        r = phone.post("/api/auth/login", json={"code": CODES["namorada"]}, headers={**CF, **ua})
+        assert r.status_code == 403 and r.json()["code"] == "device_pending"
+        devs = admin.get("/api/share/devices").json()["devices"]
+        assert len(devs) == 1 and devs[0]["status"] == "pending" and devs[0]["agent"] == "Safari em iPhone"
+        key = devs[0]["id"]
+        # só o admin local vê/gere
+        assert phone.get("/api/share/devices", headers=CF).status_code in (401, 403)
+        # aprovar → entra, e aparece online
+        admin.post(f"/api/share/devices/{key}/approve")
+        assert phone.post("/api/auth/login", json={"code": CODES["namorada"]}, headers={**CF, **ua}).status_code == 200
+        d = admin.get("/api/share/devices").json()["devices"][0]
+        assert d["online"] == 1 and d["logins"] == 1 and d["profiles"] == ["namorada"]
+        # bloquear → sessão cai e não volta a entrar, mesmo com IP diferente
+        admin.post(f"/api/share/devices/{key}/block")
+        assert phone.get("/api/session", headers=CF).status_code == 401
+        other_ip = {**CF, **ua, "cf-connecting-ip": "203.0.113.9"}
+        assert phone.post("/api/auth/login", json={"code": CODES["namorada"]}, headers=other_ip).status_code == 403
+        # esquecer → volta a ser um dispositivo novo (pendente)
+        admin.delete(f"/api/share/devices/{key}")
+        assert admin.get("/api/share/devices").json()["devices"] == []
+
+
+def test_share_accounts_list_each_device(make_app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PROFILE", "rui")
+    state, _, public = make_app()
+    chrome = {"user-agent": "Mozilla/5.0 (X11; Linux x86_64) Chrome/120 Safari/537"}
+    firefox = {"user-agent": "Mozilla/5.0 (X11; Linux x86_64; rv:120) Gecko Firefox/120"}
+    phone = {**CF, "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17) Safari/605.1"}
+    with TestClient(public, base_url="https://testserver") as pc, TestClient(public) as pc2, \
+            TestClient(public, base_url="https://testserver") as tel:
+        login(pc, "rui", headers=chrome)
+        login(pc2, "rui", headers=firefox)
+        state.share.start(120)
+        login(tel, "rui", headers=phone)
+        acc = {a["profile"]: a for a in pc.get("/api/share", headers=chrome).json()["accounts"]}["rui"]
+        assert [(d["agent"], d["remote"]) for d in acc["devices"]] == [
+            ("Chrome em Linux", False), ("Firefox em Linux", False), ("Safari em iPhone", True)]
+        assert [d["current"] for d in acc["devices"]] == [True, False, False]

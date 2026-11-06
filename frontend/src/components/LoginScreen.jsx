@@ -4,7 +4,7 @@ import { backgroundLayers } from '../backgrounds'
 import { DEFAULTS, applySettings, hexToRgb, loginLook, rememberLoginLook } from '../theme'
 import EncriptacaoVerify from './auth/EncriptacaoVerify'
 import LoveVerify from './auth/LoveVerify'
-import { systemTheme } from './auth/otpShared'
+import { initialLoginTheme, saveLoginTheme } from './auth/otpShared'
 
 // Perfil que vê o ecrã "Decrypter"; todos os outros veem o do coração.
 const ADMIN_PROFILE = 'admin'
@@ -21,11 +21,11 @@ export default function LoginScreen({ onLogin, notice }) {
   const [look] = useState(loginLook) // { profile, accent } ou null
   const [variant, setVariant] = useState(() => variantOf(look?.profile)) // 'crypt' | 'love'
   const [handoffCode, setHandoffCode] = useState(null)
-  const [theme, setTheme] = useState(systemTheme)
+  const [theme, setTheme] = useState(initialLoginTheme)
   const [greeting, setGreeting] = useState(null)
   const sessionRef = useRef(null)
 
-  // O ecrã de login usa sempre o tema do sistema (ainda não se sabe o perfil).
+  // O ecrã de login arranca escuro (ainda não se sabe o perfil).
   useEffect(() => applySettings(DEFAULTS), [])
 
   async function submit(code, own) {
@@ -54,7 +54,12 @@ export default function LoginScreen({ onLogin, notice }) {
     theme,
     backdrop,
     accent: look?.accent,
-    onToggleTheme: () => setTheme((t) => (t === 'dark' ? 'light' : 'dark')),
+    onToggleTheme: () =>
+      setTheme((t) => {
+        const next = t === 'dark' ? 'light' : 'dark'
+        saveLoginTheme(next)
+        return next
+      }),
     greeting,
     onVerified: () => onLogin(sessionRef.current),
     initialCode: handoffCode,

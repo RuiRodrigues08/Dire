@@ -72,6 +72,7 @@ class Settings:
     include_speaker_notes: bool
     public_host: str = "127.0.0.1"
     public_port: int = 8000
+    device_approval: bool = True
     extra: dict = field(default_factory=dict)
 
     @property
@@ -102,6 +103,7 @@ def load_settings() -> Settings:
         history_turns=_int("HISTORY_TURNS", 3),
         chat_retention_days=_int("CHAT_RETENTION_DAYS", 60),
         share_default_minutes=_int("SHARE_DEFAULT_MINUTES", 120),
+        device_approval=os.environ.get("DEVICE_APPROVAL", "1").strip().lower() not in {"0", "false", "no"},
         cloudflared_bin=os.environ.get("CLOUDFLARED_BIN", "cloudflared"),
         admin_profile=os.environ.get("ADMIN_PROFILE", "admin"),
         remote_session_max_minutes=_int("REMOTE_SESSION_MAX_MINUTES", 120),

@@ -2,7 +2,7 @@
 // (backend/app/core/user_settings.py). Aplicar = mudar variáveis CSS na raiz.
 
 export const DEFAULTS = {
-  theme: 'system',
+  theme: 'dark', // escuro por omissão; a escolha da pessoa fica guardada nas definições
   accent: '#1E4A62', // azul do logo
   font: 'sans',
   font_size: 'm',

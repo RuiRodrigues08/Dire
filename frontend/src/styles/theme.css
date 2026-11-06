@@ -232,3 +232,12 @@ body {
   }
 }
 
+
+/* iOS/iPadOS faz zoom ao focar campos com letra < 16px: em ecrãs tácteis, nunca abaixo disso. */
+@media (pointer: coarse) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}

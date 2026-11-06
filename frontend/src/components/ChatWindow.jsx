@@ -147,8 +147,14 @@ export default function ChatWindow({
     (text) => {
       const query = text.trim()
       if (!query || streaming) return
-      // No início ainda não há conversa: o App cria-a e a pergunta segue por `pendingQuery`.
-      if (!cid) return onStartWith?.(query)
+      // Só se pergunta com conteúdo: ficheiros anexados ou uma base de dados associada.
+      if (!cid || documents.length === 0) {
+        toast(
+          docs.busy ? 'Aguarda que os ficheiros terminem de ser indexados.' : 'Anexa um ficheiro ou associa uma base de dados antes de perguntar.',
+          'error',
+        )
+        return
+      }
       const docIds = excluded.size ? documents.filter((d) => !excluded.has(d.id)).map((d) => d.id) : null
       if (docIds && docIds.length === 0) {
         toast('Liga pelo menos um documento para perguntar.', 'error')
@@ -156,7 +162,7 @@ export default function ChatWindow({
       }
       run({ userContent: query, query, start: (signal) => streamChat(cid, query, docIds, signal) })
     },
-    [cid, streaming, documents, excluded, toast, run, onStartWith],
+    [cid, streaming, documents, excluded, toast, run, docs.busy],
   )
 
   // Pergunta feita no início: corre quando a conversa nova estiver carregada.
@@ -200,6 +206,7 @@ export default function ChatWindow({
       centered={centered}
       streaming={streaming}
       sendWith={settings.send_with}
+      canSend={documents.length > 0}
       onSend={send}
       onStop={() => abortRef.current?.abort()}
       placeholder={noDocs ? 'Junta documentos com o + ou escreve a tua pergunta…' : 'Pergunta sobre os teus documentos…'}
@@ -318,7 +325,7 @@ function Shell({ brand, actions, title, page, subtitle, onSubtitle, subtitleActi
             quando a barra lateral está recolhida. */}
         <header className="flex h-[4.5rem] shrink-0 items-center gap-3 border-b border-line px-4 sm:px-5">
           {brand}
-          <div className="min-w-0 flex-1 leading-tight">
+          <div className="min-w-0 flex-1 overflow-hidden leading-tight">
             <h1 className="truncate text-base font-bold sm:text-lg" title={title}>{shortTitle(title)}</h1>
             <div className="mt-0.5 flex min-w-0 items-center gap-2 text-xs text-muted">
               <span className="shrink-0">{page}</span>
@@ -326,7 +333,7 @@ function Shell({ brand, actions, title, page, subtitle, onSubtitle, subtitleActi
               {subtitle &&
                 (onSubtitle ? (
                   <button
-                    className={`focus-ring -my-0.5 inline-flex shrink-0 items-center rounded-full border px-2 py-px font-mono text-[0.68rem] transition-colors ${
+                    className={`focus-ring -my-0.5 inline-flex min-w-0 items-center truncate rounded-full border px-2 py-px font-mono text-[0.68rem] transition-colors ${
                       subtitleActive ? 'border-accent/40 bg-accent/10 text-accent' : 'border-line bg-surface-2 text-muted hover:text-fg'
                     }`}
                     onClick={onSubtitle}
@@ -336,11 +343,11 @@ function Shell({ brand, actions, title, page, subtitle, onSubtitle, subtitleActi
                     {subtitle}
                   </button>
                 ) : (
-                  <span className="shrink-0">{subtitle}</span>
+                  <span className="min-w-0 truncate">{subtitle}</span>
                 ))}
             </div>
           </div>
-          {actions}
+          <div className="flex shrink-0 items-center gap-2">{actions}</div>
         </header>
         {children}
       </div>
@@ -746,7 +753,7 @@ function CopyButton({ text }) {
 
 const MAX_CHARS = 2000
 
-function Composer({ disabled, centered, streaming, sendWith, onSend, onStop, placeholder, attach }) {
+function Composer({ disabled, canSend = true, centered, streaming, sendWith, onSend, onStop, placeholder, attach }) {
   const [text, setText] = useState('')
   const ta = useRef(null)
 
@@ -759,6 +766,7 @@ function Composer({ disabled, centered, streaming, sendWith, onSend, onStop, pla
 
   function submit() {
     if (!text.trim() || streaming || text.length > MAX_CHARS) return
+    if (!canSend) return onSend(text) // mostra o aviso; o texto fica por enviar
     onSend(text)
     setText('')
   }
@@ -810,8 +818,9 @@ function Composer({ disabled, centered, streaming, sendWith, onSend, onStop, pla
             <button
               className="focus-ring inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-ui-sm bg-accent text-accent-fg transition hover:bg-accent/90 disabled:opacity-40"
               onClick={submit}
-              disabled={disabled || !text.trim() || over}
+              disabled={disabled || !text.trim() || over || !canSend}
               aria-label="Enviar"
+              title={canSend ? undefined : 'Anexa um ficheiro ou associa uma base de dados'}
             >
               <ArrowRight className="h-4 w-4" />
             </button>

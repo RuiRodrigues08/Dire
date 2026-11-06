@@ -63,8 +63,23 @@ export function typingColor(accent, error) {
 /** Estilo da caixa ativa (a que recebe o próximo dígito). */
 export const ACTIVE_TILE_BG = 'radial-gradient(circle at 50% 50%, rgb(var(--otp-c) / .18), rgb(var(--otp-c) / .04))'
 
-export const systemTheme = () =>
-  window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+// Ecrã de login: escuro por omissão; a escolha feita no botão fica guardada neste dispositivo.
+const LOGIN_THEME_KEY = 'rag.loginTheme'
+export const initialLoginTheme = () => {
+  try {
+    const v = localStorage.getItem(LOGIN_THEME_KEY)
+    return v === 'light' ? 'light' : 'dark'
+  } catch {
+    return 'dark'
+  }
+}
+export const saveLoginTheme = (t) => {
+  try {
+    localStorage.setItem(LOGIN_THEME_KEY, t)
+  } catch {
+    /* modo privado */
+  }
+}
 
 export const BASE_CSS = `
 .otp-root *{box-sizing:border-box}

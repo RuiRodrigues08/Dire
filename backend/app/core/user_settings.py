@@ -7,7 +7,7 @@ import re
 from .db import connect, utcnow
 
 DEFAULTS: dict = {
-    "theme": "system",
+    "theme": "dark",  # escuro por omissão; a escolha da pessoa fica guardada
     "accent": "#1E4A62",  # azul do logo
     "font": "sans",
     "font_size": "m",

@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from ..core import user_settings
 from ..core.auth import COOKIE_NAME, Session, client_ip, is_remote_request
+from ..core.devices import DEVICE_COOKIE, describe_agent, device_key, new_token, valid_token
 from ..core.state import AppState
 from ..services import conversations as convs
 from ..services import documents as docs
@@ -69,8 +70,13 @@ def login(body: LoginBody, request: Request, response: Response, state: AppState
         raise HTTPException(429, f"Demasiadas tentativas. Tenta novamente daqui a {wait // 60 + 1} min.",
                             headers={"Retry-After": str(wait)})
     remote = is_remote_request(request.headers)
+    device_token = request.cookies.get(DEVICE_COOKIE)
+    if remote and state.devices.status(device_token) == "blocked":
+        raise HTTPException(403, "Este dispositivo foi bloqueado.")
     profile = state.registry.verify(body.code)  # verifica sempre todos os hashes
     if profile is None:
+        if remote:
+            state.devices.failed_attempt(device_token)
         locked = state.limiter.failure(ip)
         if locked:
             raise HTTPException(429, f"Demasiadas tentativas. Tenta novamente daqui a {locked // 60} min.",
@@ -78,8 +84,24 @@ def login(body: LoginBody, request: Request, response: Response, state: AppState
         raise HTTPException(401, "Código inválido.")
     if remote and not state.share.is_active():
         raise HTTPException(403, "A partilha não está ativa.")
+    device_key_ = None
+    if remote:
+        if not valid_token(device_token):
+            device_token = new_token()
+        status = state.devices.register(device_token, profile, ip, request.headers.get("user-agent", ""))
+        device_key_ = device_key(device_token)
+        response.set_cookie(DEVICE_COOKIE, device_token, httponly=True, samesite="lax", secure=True,
+                            max_age=365 * 24 * 3600, path="/")
+        if status != "approved":
+            msg = ("Este dispositivo foi bloqueado." if status == "blocked" else
+                   "Dispositivo novo: pede ao administrador para o aprovar e tenta de novo.")
+            out = JSONResponse({"detail": msg, "code": "device_" + status}, status_code=403)
+            for h in response.raw_headers:
+                if h[0].lower() == b"set-cookie":
+                    out.raw_headers.append(h)
+            return out
     state.limiter.success(ip)
-    sess, token = state.sessions.create(profile, remote)
+    sess, token = state.sessions.create(profile, remote, device_key_, ip, describe_agent(request.headers.get("user-agent", "")))
     response.set_cookie(
         COOKIE_NAME, token, httponly=True, samesite="lax",
         secure=remote or request.url.scheme == "https",
@@ -314,6 +336,8 @@ async def chat(body: ChatBody, conv: dict = Depends(owned_conversation), ws: Wor
         raise HTTPException(400, "A pergunta está vazia.")
     if len(query) > s.max_query_chars:
         raise HTTPException(400, f"A pergunta excede {s.max_query_chars} caracteres.")
+    if not docs.list_documents(ws, conv["id"]):
+        raise HTTPException(400, "Anexa um ficheiro ou associa uma base de dados antes de perguntar.")
     doc_ids = None
     if body.doc_ids:
         doc_ids = docs.valid_doc_ids(ws, conv["id"], body.doc_ids)
@@ -478,6 +502,18 @@ def local_session(sess: Session = Depends(current_session), state: AppState = De
     return sess
 
 
+def _session_devices(sessions: list[Session], me: Session) -> list[dict]:
+    """Dispositivos com sessão aberta. Pelo link: um por dispositivo (cookie); neste computador:
+    um por navegador (o mesmo navegador partilha a sessão entre separadores)."""
+    seen: dict[tuple, dict] = {}
+    for s in sorted(sessions, key=lambda s: s.created_at):
+        key = ("remote", s.device) if s.remote else ("local", s.agent)
+        d = seen.setdefault(key, {"remote": s.remote, "agent": s.agent or "Dispositivo desconhecido",
+                                  "ip": s.ip if s.remote else None, "since": int(s.created_at), "current": False})
+        d["current"] = d["current"] or s.sid == me.sid
+    return sorted(seen.values(), key=lambda d: d["since"])
+
+
 def _share_info(state: AppState, me: Session) -> dict:
     """Estado do link e quem está ligado agora (por perfil: neste computador e/ou pelo link)."""
     sessions = state.sessions.active()
@@ -491,9 +527,62 @@ def _share_info(state: AppState, me: Session) -> dict:
             "local": sum(not s.remote for s in mine),
             "remote": sum(s.remote for s in mine),
             "online": bool(mine),
+            "devices": _session_devices(mine, me),
         })
     return {**state.share_manager.status(), "accounts": accounts,
             "default_minutes": state.settings.share_default_minutes}
+
+
+def _devices_info(state: AppState) -> dict:
+    online: dict[str, int] = {}
+    for s in state.sessions.active():
+        if s.remote and s.device:
+            online[s.device] = online.get(s.device, 0) + 1
+    return {
+        "require_approval": state.devices.require_approval,
+        "devices": [{**d, "online": online.get(d["id"], 0)} for d in state.devices.list()],
+    }
+
+
+class ApprovalBody(BaseModel):
+    required: bool
+
+
+@router.get("/share/devices")
+def share_devices(sess: Session = Depends(local_session), state: AppState = Depends(get_state)):
+    return _devices_info(state)
+
+
+@router.put("/share/devices/approval")
+def share_devices_approval(body: ApprovalBody, sess: Session = Depends(local_session),
+                           state: AppState = Depends(get_state)):
+    state.devices.set_require_approval(body.required)
+    return _devices_info(state)
+
+
+@router.post("/share/devices/{key}/{action}")
+def share_device_action(key: str, action: str, sess: Session = Depends(local_session),
+                        state: AppState = Depends(get_state)):
+    """approve | block | disconnect (termina as sessões, o dispositivo continua aprovado)."""
+    if action not in {"approve", "block", "disconnect"}:
+        raise HTTPException(404, "Ação desconhecida.")
+    if action == "disconnect":
+        if not any(d["id"] == key for d in state.devices.list()):
+            raise HTTPException(404, "Dispositivo não encontrado.")
+    elif not state.devices.set_status(key, "approved" if action == "approve" else "blocked"):
+        raise HTTPException(404, "Dispositivo não encontrado.")
+    if action != "approve":
+        state.sessions.revoke_device(key)
+    return _devices_info(state)
+
+
+@router.delete("/share/devices/{key}")
+def share_device_forget(key: str, sess: Session = Depends(local_session), state: AppState = Depends(get_state)):
+    """Esquece o dispositivo (se voltar, aparece como novo)."""
+    if not state.devices.forget(key):
+        raise HTTPException(404, "Dispositivo não encontrado.")
+    state.sessions.revoke_device(key)
+    return _devices_info(state)
 
 
 @router.get("/share")

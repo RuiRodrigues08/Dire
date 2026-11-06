@@ -98,6 +98,10 @@ export const api = {
   startShare: (body) => request('POST', '/api/share/start', body),
   extendShare: (minutes) => request('POST', '/api/share/extend', { minutes }),
   stopShare: () => request('POST', '/api/share/stop'),
+  shareDevices: () => request('GET', '/api/share/devices'),
+  deviceAction: (id, action) => request('POST', `/api/share/devices/${id}/${action}`), // approve | block | disconnect
+  forgetDevice: (id) => request('DELETE', `/api/share/devices/${id}`),
+  setDeviceApproval: (required) => request('PUT', '/api/share/devices/approval', { required }),
 
   settings: () => request('GET', '/api/settings'),
   saveSettings: (data) => request('PUT', '/api/settings', data),

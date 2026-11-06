@@ -52,6 +52,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("PROFILES_FILE", str(pf))
     monkeypatch.setenv("FRONTEND_DIST", str(tmp_path / "no-dist"))
     monkeypatch.setenv("SESSION_SECRET", "x" * 48)
+    monkeypatch.setenv("DEVICE_APPROVAL", "0")  # os testes antigos fazem logins remotos sem aprovação
     monkeypatch.setenv("EMBEDDINGS_BACKEND", "hash")
     monkeypatch.setenv("SCORE_THRESHOLD", "0.4")
     return tmp_path

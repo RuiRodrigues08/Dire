@@ -1,0 +1,20 @@
+Copyright (c) 2026 Rui Rodrigues. All rights reserved.
+
+This repository is published publicly so that its source code, documentation
+and results can be viewed as part of the author's portfolio.
+
+No license is granted. Viewing the contents on GitHub, and forking them on
+GitHub as allowed by the GitHub Terms of Service, are permitted. Any other
+copying, modification, distribution, sublicensing or use of this work, in
+whole or in part, requires the prior written permission of the author.
+
+To request permission, contact the author through GitHub:
+https://github.com/RuiRodrigues08
+
+Third-party components (the Qwen2.5 model, the BGE-M3 embedding model and the
+Python/npm dependencies) keep their own licenses and are not covered by this
+notice. Documents uploaded to the application remain their authors' property.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY ARISING FROM THE SOFTWARE OR ITS USE.
