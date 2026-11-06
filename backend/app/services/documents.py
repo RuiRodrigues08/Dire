@@ -13,7 +13,9 @@ from pathlib import Path
 from ..core.db import connect, utcnow
 from .chunking import ParseResult, normalize
 from .embeddings import Embedder
+from .ingest_docx import parse_docx
 from .ingest_pdf import parse_pdf
+from .legal_refs import legal_meta
 from .ingest_ppt import parse_pptx
 from .workspace import Workspace, library_scope
 
@@ -27,14 +29,16 @@ class IngestError(Exception):
 
 def _detect_type(filename: str, head: bytes) -> str:
     ext = Path(filename).suffix.lower()
-    if ext not in {".pdf", ".pptx"}:
-        raise IngestError("Só são aceites ficheiros .pdf e .pptx.", 415)
+    if ext not in {".pdf", ".pptx", ".docx"}:
+        raise IngestError("Só são aceites ficheiros .pdf, .pptx e .docx.", 415)
     if head.startswith(b"\xd0\xcf\x11\xe0"):
-        raise IngestError("O ficheiro está protegido por palavra-passe (ou é um .ppt antigo).", 400)
+        raise IngestError("O ficheiro está protegido por palavra-passe (ou é um .ppt/.doc antigo).", 400)
     if ext == ".pdf" and not head.lstrip()[:5].startswith(b"%PDF-"):
         raise IngestError("O conteúdo não é um PDF válido.", 415)
     if ext == ".pptx" and not head.startswith(b"PK\x03\x04"):
         raise IngestError("O conteúdo não é um PPTX válido.", 415)
+    if ext == ".docx" and not head.startswith(b"PK\x03\x04"):
+        raise IngestError("O conteúdo não é um DOCX válido.", 415)
     return ext[1:]
 
 
@@ -117,6 +121,10 @@ def ingest(ws: Workspace, embedder: Embedder, conversation_id: str | None, filen
             }
             if c.page_end:
                 m["page_end"] = c.page_end
+            # Função do bloco (.docx de casos: tipo, caso_id, pergunta_id, artigos, temas…).
+            m.update({k: v for k, v in c.meta.items() if k not in m and isinstance(v, (str, int, float, bool))})
+            if "artigos" not in c.meta and "temas" not in c.meta:   # PDF/PPTX: só artigos e temas
+                m.update(legal_meta(text))
             metadatas.append(m)
         ws.vectors.add(
             ids=[f"{doc_id}:{i}" for i in range(len(texts))],
@@ -141,7 +149,7 @@ def ingest(ws: Workspace, embedder: Embedder, conversation_id: str | None, filen
             raise IngestError(f"Não foi possível ler o ficheiro: {exc}", 422) from exc
         raise
 
-    units = "slides" if file_type == "pptx" else "páginas"
+    units = {"pptx": "slides", "docx": "partes"}.get(file_type, "páginas")
     return {
         "duplicate": False, "doc_id": doc_id, "filename": filename, "file_type": file_type,
         "n_chunks": len(texts), "skipped": parsed.skipped_units, "skipped_kind": units,
@@ -152,6 +160,8 @@ def ingest(ws: Workspace, embedder: Embedder, conversation_id: str | None, filen
 def _parse(path: Path, file_type: str, s) -> ParseResult:
     if file_type == "pptx":
         return parse_pptx(path, max_tokens=s.slide_max_tokens, include_notes=s.include_speaker_notes)
+    if file_type == "docx":
+        return parse_docx(path, max_tokens=s.pdf_chunk_tokens, overlap=s.pdf_chunk_overlap)
     try:
         return parse_pdf(path, parser=s.pdf_parser, max_tokens=s.pdf_chunk_tokens, overlap=s.pdf_chunk_overlap)
     except RuntimeError as exc:  # PyMuPDF: ficheiro corrompido

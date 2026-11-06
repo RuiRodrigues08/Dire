@@ -6,10 +6,10 @@
 ![Ollama](https://img.shields.io/badge/Ollama-Qwen2.5--7B-black)
 ![ChromaDB](https://img.shields.io/badge/ChromaDB-vectors-FF6F61)
 ![Embeddings](https://img.shields.io/badge/Embeddings-BGE--M3-yellow)
-![Tests](https://img.shields.io/badge/tests-35%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-45%20passing-brightgreen)
 ![License](https://img.shields.io/badge/License-All%20rights%20reserved-red)
 
-A private, fully local question-answering assistant over your own PDFs and PowerPoint slides. Answers come only from the uploaded documents, with a citation to the file and page/slide for every fact, and the model refuses when the documents do not contain the answer. Everything runs on the local machine (Ollama + ChromaDB).
+A private, fully local question-answering assistant over your own PDFs, PowerPoint slides and Word documents. Answers come only from the uploaded documents, with a citation to the file and page/slide for every fact, and the model refuses when the documents do not contain the answer. Everything runs on the local machine (Ollama + ChromaDB).
 
 Personal project · 2026 · designed and built solo
 
@@ -23,11 +23,12 @@ It went through a command-line "beta" (PDF only) before the current version with
 
 ## What I built
 
-- **A structure-aware ingestion pipeline** for PDF and PowerPoint: heading detection from font statistics, section-aligned chunks of ~500 tokens with whole-sentence overlap, one chunk per slide, and page-accurate citations.
+- **A structure-aware ingestion pipeline** for PDF, PowerPoint and Word (where each block of a solved-cases document is tagged as question, answer or theory, with the legal articles it cites): heading detection from font statistics, section-aligned chunks of ~500 tokens with whole-sentence overlap, one chunk per slide, and page-accurate citations.
 - **A retrieval and answering engine** with four answer paths (specific question, document overview, topic menu, summary of chosen topics), follow-up question rewriting and a context-budget fitter for a 4k-token local model.
 - **The full application:** FastAPI backend (ChromaDB, BGE-M3 embeddings, Qwen2.5-7B through Ollama), React + Tailwind frontend with streamed answers and sources, per-profile data isolation, reusable document libraries, PDF export of conversations and a temporary share link through a Cloudflare tunnel.
 - **Tools for law-style practical cases:** build a model answer from solved cases, then draft a resolution for a new case.
-- **A 35-test pytest suite** that runs without downloading any model (fake LLM, hash embeddings).
+- **An evaluation script for practical cases** that holds out exam questions from the corpus and scores retrieval and answers against a small answer key.
+- **A 45-test pytest suite** that runs without downloading any model (fake LLM, hash embeddings).
 
 ## Skills demonstrated
 
@@ -106,6 +107,21 @@ Chunking decides what the model can ever see, so I designed it around three goal
 | Speaker notes | Off by default (`INCLUDE_SPEAKER_NOTES`) | Notes are often personal or noisy; they can be turned on when they contain the real explanation. |
 | Empty slides | Skipped and reported | Image-only slides have nothing to embed. |
 
+#### Word documents (`ingest_docx.py`)
+
+Built for solved-case material (class exercises, past exams, model answers). These files rarely use heading styles: the structure is in bold text, Word's automatic numbering and text markers, so each paragraph is classified by rules, and every block is stored with its role.
+
+| Rule | Example | Result |
+|------|---------|--------|
+| A paragraph that is only a Roman numeral (or "Caso 2", "Hipótese 3") opens a case | `II`, `III – 7 valores` | `caso_id`, points in `cotacao` |
+| A bold title with "exame", "teste", "frequência" or "época" opens a group | `1.º exame parcelar — 2023/10/23` | cases become `<group> – I`, … |
+| Inside a case, a question has "?", "Quid iuris", or starts with "Comente", "Desenvolva", "Faça", "Com base"… ("Suponha"/"Imagine" only if numbered or bold); a paragraph ending in ":" stays in the statement | `Suponha que o contrato não foi reduzido a escrito. Quid iuris?` | new `pergunta_id` |
+| Once the answer has started, only a numbered or bold paragraph opens the next question; an indented unnumbered paragraph right after a numbered question continues it | | no answer is mistaken for a question |
+| `Resposta completa:`, `Resolução:`, `Esquema:` switch the answer variant | Case I has an outline and a full answer | `variante`: `esquema` / `completa` |
+| Outside cases, a heading style or a short all-bold paragraph opens a theory section | `Período experimental` | `tipo = teoria` |
+
+Each question becomes a `pergunta` block (case statement + the question, so a new case can be matched against solved ones) and its resolution becomes `resposta` blocks whose header repeats the question. Every block also stores the **articles it cites** in a canonical form (`art. 112.º/2/a) CT`, from `legal_refs.py`, which handles "art.º 1152º e 1153º CC e 11º CT", "artigo 3º nº4 do CT", "53º a 59º da CRP"…) and its **topics** from a closed list taken from the course's model answers (keywords + Labour Code article ranges). PDF and PPTX chunks get the articles and topics too. A .docx has no fixed pages, so blocks are cited as `Parte N` (their order in the file). Questions with no resolution in the file are reported as upload warnings.
+
 #### After chunking (`documents.py`)
 
 - Text is normalised (soft hyphens, repeated spaces, extra blank lines) before embedding.
@@ -144,9 +160,21 @@ Tokens are the app's own estimate. Slides produce small chunks because each slid
 
 The tests cover, among others: headings and page numbers, 10 % overlap, chunks crossing pages, PPTX levels/tables/long slides, refusal without LLM for out-of-document questions, follow-up rewriting, overview and topic-menu summaries, profile isolation, upload validation and rollback, queue positions, share-link limits and expiry, CSRF/security headers, PDF export and DB migration.
 
+## Evaluating practical cases
+
+`backend/eval/casos_dt.json` is a small answer key: the four questions of a past exam and one solved case from the classes, each with the expected topics, the **essential** articles (count for recall) and other **accepted** articles (count as correct for precision). `excluir_do_corpus` removes those questions and their resolutions from the indexed material, so the system has to solve them from the rest.
+
+```bash
+cd backend && source .venv/bin/activate
+python -m app.tools.eval_cases "Aulas TP.docx" "Respostas modelo.docx" "Resposta modelo.pdf"          # retrieval only, fast
+python -m app.tools.eval_cases "Aulas TP.docx" "Respostas modelo.docx" "Resposta modelo.pdf" --solve --out eval/run.json
+```
+
+Everything runs in a temporary folder with the app's own code (ingestion, ChromaDB, `CaseTools.solve`), never in the profiles' data. For each question it reports whether the retrieved blocks cover the expected topics and essential articles (`temas@k`, `artigos@k`), the rank of the first block on the right topic, and with `--solve` the recall and precision of the articles cited in the answer and the number of "Não encontrei nos documentos" parts. The numbers are for comparing versions of the system before and after a change, not an absolute grade.
+
 ## Lessons learned and next steps
 
-- **Measure retrieval, don't only reason about it.** Threshold, Top-K and chunk size were chosen by reasoning and manual tests. The next step is a small set of real questions to measure recall@k and answer faithfulness, and tune from there.
+- **Measure retrieval, don't only reason about it.** Threshold, Top-K and chunk size were chosen by reasoning and manual tests. The practical-case evaluation above is the first step; the next is to extend it to the chat questions and tune from there.
 - **Heuristics meet real documents.** Font-based heading detection works on most course material, but a bold table header can look like a title, and a title repeated across slides gets duplicated. Docling's layout model is the alternative I would compare against.
 - **Dense retrieval misses exact terms.** Adding BM25 (hybrid search) and a re-ranker would help with acronyms, code and exact names.
 - **Next features:** OCR for scanned pages, and a learned router instead of the keyword regex that detects overview and summary questions.

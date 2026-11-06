@@ -5,6 +5,7 @@ import {
 } from 'lucide-react'
 import { api } from '../api'
 import { ACCEPT, useFileDrop } from './DocumentTray'
+import { UNIT_LABEL } from '../fileTypes'
 import { shortTitle } from './TopBar'
 import { useSettings } from './ThemeProvider'
 import { Modal, Spinner, useConfirm, useToast } from './ui'
@@ -429,7 +430,7 @@ function LibraryDetail({ lib, conversation, onAttach, onChanged, onDelete, onOpe
           </span>
           <span className="min-w-0">
             <span className="block text-sm font-medium">{busy ? 'A indexar…' : 'Juntar ficheiros'}</span>
-            <span className="block text-xs text-muted">PDF ou PPTX · arrasta para aqui ou clica</span>
+            <span className="block text-xs text-muted">PDF, PPTX ou DOCX · arrasta para aqui ou clica</span>
           </span>
         </button>
         <input
@@ -498,7 +499,7 @@ function LibraryDetail({ lib, conversation, onAttach, onChanged, onDelete, onOpe
                   <p className="flex items-center gap-1.5 text-xs font-medium">
                     {h.file_type === 'pptx' ? <Presentation className="h-3.5 w-3.5 text-muted" /> : <FileText className="h-3.5 w-3.5 text-muted" />}
                     <span className="min-w-0 truncate">{h.filename}</span>
-                    <span className="shrink-0 text-muted">· {h.file_type === 'pptx' ? 'Slide' : 'Pág.'} {h.page_number}</span>
+                    <span className="shrink-0 text-muted">· {UNIT_LABEL[h.file_type] || 'Pág.'} {h.page_number}</span>
                   </p>
                   <p className="mt-1 line-clamp-3 text-sm text-fg/85"><Highlight text={h.snippet} query={q} /></p>
                 </li>
@@ -528,7 +529,7 @@ function LibraryDetail({ lib, conversation, onAttach, onChanged, onDelete, onOpe
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium" title={d.filename}>{d.filename}</span>
-                  <span className="block text-xs text-muted">{pptx ? 'Apresentação PPTX' : 'Documento PDF'}</span>
+                  <span className="block text-xs text-muted">{pptx ? 'Apresentação PPTX' : d.file_type === 'docx' ? 'Documento Word' : 'Documento PDF'}</span>
                 </span>
                 <button
                   className="icon-btn h-8 w-8 opacity-0 hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"

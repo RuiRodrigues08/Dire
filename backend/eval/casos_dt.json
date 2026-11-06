@@ -1,0 +1,76 @@
+{
+  "descricao": "Conjunto de avaliação de Direito do Trabalho (1.º teste). Perguntas retiradas do corpus durante a avaliação: o sistema tem de as resolver só com o resto do material.",
+  "gabarito": "temas_esperados usa os ids de app/services/legal_refs.py (TOPICS). Os artigos estão na forma base ('12 CT'). artigos_essenciais: os que uma boa resolução tem de citar (contam para o recall). artigos_aceites: citações também corretas (contam como acertos na precisão, mas não são obrigatórias). Tirados das resoluções do próprio documento; quando a pergunta não tem resolução, isso está indicado em 'notas'.",
+  "excluir_do_corpus": {
+    "caso_id": ["IV", "1-exame-parcelar-2023-10-23/"],
+    "texto": ["Bom Tempero", "Arlindo celebrou um contrato", "CTT – Correios de Portugal"]
+  },
+  "itens": [
+    {
+      "id": "exame-I",
+      "origem": "Aulas TP 1.º teste.docx · 1.º exame parcelar 2023/10/23 · I (4 valores)",
+      "tipo": "tema",
+      "enunciado": "",
+      "pergunta": "Faça uma exposição sobre o artigo 3.º do CT relacionando-o com as fontes do Direito do Trabalho.",
+      "temas_esperados": ["fontes_art3"],
+      "artigos_essenciais": ["3 CT"],
+      "artigos_aceites": ["1 CT", "2 CT", "53 CRP", "476 CT"],
+      "notas": "A resolução do documento é um esquema: art. 1.º e 2.º (fontes específicas), art. 3.º/1, /3 e /4, art. 53.º CRP."
+    },
+    {
+      "id": "exame-II",
+      "origem": "Aulas TP 1.º teste.docx · 1.º exame parcelar 2023/10/23 · II (5 valores)",
+      "tipo": "caso",
+      "enunciado": "",
+      "pergunta": "Arlindo celebrou um contrato por escrito com Berta em 1 de janeiro de 2023 mediante o qual se obrigava nos seguintes termos: Arlindo comprometia-se a prestar os seus serviços profissionais como vendedor de livros ao domicílio obedecendo sempre na execução das vendas às diretivas de Berta. Tais diretivas determinavam o itinerário que Arlindo deveria cumprir, as condições e os dias de vendas. Como contrapartida, Arlindo recebia um passe de transportes coletivos, uma importância fixa mensal de 800 euros, e uma percentagem sobre as vendas realizadas. Poderá caracterizar-se este contrato como contrato de trabalho? Justifique.",
+      "temas_esperados": ["qualificacao"],
+      "artigos_essenciais": ["11 CT", "12 CT"],
+      "artigos_aceites": ["1152 CC", "1153 CC", "1154 CC", "1155 CC", "342 CC"],
+      "notas": "Resolução em esquema: noção e elementos (art. 1152.º/1153.º CC, 11.º CT), prestação de serviço (1154.º CC), primazia da realidade, 342.º/1 CC e presunção do 12.º (alíneas a) a d) preenchidas)."
+    },
+    {
+      "id": "exame-III",
+      "origem": "Aulas TP 1.º teste.docx · 1.º exame parcelar 2023/10/23 · III (7 valores)",
+      "tipo": "caso",
+      "enunciado": "Suponha que CTT – Correios de Portugal, SA, decide contratar Alberto, estipulando-se no contrato de trabalho, assinado pelas partes, que “o contrato é celebrado pelo período de um ano, com início em 1 de novembro de 2022, com vista à salvaguarda do risco de mercado ou de negócio inerente à presente atividade empresarial”.",
+      "pergunta": "Com base nos elementos descritos, que comentários se lhe afiguram? Fundamente a resposta, expondo os aspetos fundamentais do regime jurídico do contrato de trabalho a termo.",
+      "temas_esperados": ["termo_certo"],
+      "artigos_essenciais": ["140 CT", "147 CT"],
+      "artigos_aceites": ["139 CT", "141 CT", "148 CT", "149 CT", "53 CRP"],
+      "notas": "Resolução em esquema: falta o requisito material (não é necessidade temporária, art. 140.º/1, /2 e /4), logo o contrato considera-se sem termo (art. 147.º)."
+    },
+    {
+      "id": "exame-IV",
+      "origem": "Aulas TP 1.º teste.docx · 1.º exame parcelar 2023/10/23 · IV (4 valores)",
+      "tipo": "tema",
+      "enunciado": "",
+      "pergunta": "Desenvolva o seguinte tema, relacionando os seguintes aspetos: objeto da prestação de trabalho, categoria, atividade contratada, mobilidade funcional e poder de direção do empregador.",
+      "temas_esperados": ["mobilidade_funcional"],
+      "artigos_essenciais": ["115 CT", "118 CT", "120 CT"],
+      "artigos_aceites": ["119 CT", "97 CT", "128 CT", "405 CC", "280 CC"],
+      "notas": "Sem resolução no documento. Gabarito tirado das resoluções do caso III.2 e do caso IV das aulas TP e da secção 'Objeto da prestação acordada // Mobilidade funcional' das respostas-modelo."
+    },
+    {
+      "id": "aulas-IV.1",
+      "origem": "Aulas TP 1.º teste.docx · caso IV · 1",
+      "tipo": "caso",
+      "enunciado": "Comente as seguintes situações:",
+      "pergunta": "Carlos é ajudante de cozinha do Restaurante “Bom Tempero” em Penafiel há mais de 4 anos. O seu empregador, dono do restaurante, ordenou-lhe que, durante 2 meses desempenhasse, de igual modo, durante 2 das suas 8 horas de jornada de trabalho diária, as funções de cozinheiro, para as quais Carlos tem as devidas qualificações. Quid Iuris?",
+      "temas_esperados": ["mobilidade_funcional"],
+      "artigos_essenciais": ["115 CT", "118 CT"],
+      "artigos_aceites": ["405 CC", "120 CT", "128 CT", "97 CT"],
+      "notas": "Polivalência funcional (art. 118.º): funções afins, qualificação adequada e sem desvalorização; ordem lícita, por isso dever de obediência."
+    },
+    {
+      "id": "aulas-IV.2",
+      "origem": "Aulas TP 1.º teste.docx · caso IV · 2",
+      "tipo": "caso",
+      "enunciado": "Comente as seguintes situações:\nCarlos é ajudante de cozinha do Restaurante “Bom Tempero” em Penafiel há mais de 4 anos.",
+      "pergunta": "Imagine agora que o empregador lhe solicita que seja empregado de mesa do restaurante durante 6 meses já que uma das trabalhadoras que exercia esta atividade se encontrava em licença parental. Carlos pretende saber se pode legitimamente recusar-se a cumprir a ordem do empregador, e em que termos, sendo certo que as partes estabeleceram um acordo onde constava a seguinte cláusula: “para além da atividade de ajudante de cozinha Carlos obriga-se a desempenhar quaisquer outras funções tidas por convenientes pelo empregador, e em qualquer momento, para o regular funcionamento da empresa”. Quid Iuris?",
+      "temas_esperados": ["mobilidade_funcional"],
+      "artigos_essenciais": ["120 CT"],
+      "artigos_aceites": ["280 CC", "118 CT", "115 CT", "128 CT", "405 CC"],
+      "notas": "Não há polivalência; mobilidade funcional (art. 120.º) com limites; a cláusula genérica de mobilidade é nula por indeterminação (art. 280.º CC), por isso pode recusar."
+    }
+  ]
+}

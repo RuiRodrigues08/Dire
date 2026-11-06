@@ -31,7 +31,7 @@ pre { font-family: monospace; font-size: 9pt; background-color: #f2f2f3; padding
 def _sources_line(sources: list[dict] | None) -> str:
     items = []
     for s in sources or []:
-        unit = "Slide" if s.get("file_type") == "pptx" else "Pág."
+        unit = {"pptx": "Slide", "docx": "Parte"}.get(s.get("file_type"), "Pág.")
         items.append(f"{html.escape(str(s.get('source', '')))}, {unit} {html.escape(str(s.get('page_number', '')))}")
     return f'<p class="src">Fontes: {"; ".join(dict.fromkeys(items))}</p>' if items else ""
 

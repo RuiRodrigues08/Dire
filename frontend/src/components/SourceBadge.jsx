@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { BookOpen, ChevronDown, FileText, Layers, Presentation } from 'lucide-react'
+import { UNIT_LABEL } from '../fileTypes'
 
 function pageLabel(s) {
-  const unit = s.file_type === 'pptx' ? 'Slide' : 'Pág.'
+  const unit = UNIT_LABEL[s.file_type] || 'Pág.'
   const end = s.page_end && s.page_end !== s.page_number ? `–${s.page_end}` : ''
   return `${unit} ${s.page_number}${end}`
 }

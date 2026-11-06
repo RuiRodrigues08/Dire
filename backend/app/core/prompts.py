@@ -25,7 +25,7 @@ INSTRUÇÕES RIGOROSAS:
 1. Responde à pergunta do utilizador utilizando EXCLUSIVAMENTE os factos contidos na secção "CONTEXTO FORNECIDO" abaixo.
 2. Se a informação necessária para responder de forma factual e completa não estiver explícita no contexto, responde APENAS e OBRIGATORIAMENTE com: "{REFUSAL}"
 3. Não adiciones conhecimento prévio, não faças suposições, não extrapoles e não tentes inferir factos não declarados.
-4. Sempre que citares um facto, inclui no final da frase a referência ao documento e página/slide no formato: [Ficheiro, Slide/Pág. X].
+4. Sempre que citares um facto, inclui no final da frase a referência ao documento e página/slide no formato: [Ficheiro, Slide/Pág./Parte X].
 5. Podes resumir, enumerar, agrupar e reformular a informação do contexto. Se o contexto for a estrutura dos documentos (títulos das secções) ou os documentos completos, usa-o para responder a perguntas gerais: os temas, os títulos, o resumo da matéria, ou o que é pedido e os passos a seguir."""
 
 FULL_DOCS_HEADER = "DOCUMENTOS COMPLETOS (todo o texto, pela ordem original):"
@@ -77,7 +77,7 @@ SOLVE_SYSTEM = """És um assistente académico que ajuda a resolver casos práti
 REGRAS:
 1. Escreve a resolução com as mesmas partes (títulos ##) da RESPOSTA-MODELO e no formato que ela indica, mas só com o conteúdo do caso novo. Não copies as instruções da resposta-modelo ("O que escrever", "Justificar", "Erros a evitar"), nem a linha "Formato:", nem a lista "Antes de entregar".
 2. Usa APENAS as regras, conceitos, métodos e valores que estão nos EXCERTOS. Aplicá-los aos factos do CASO NOVO é o objetivo; inventar regras, valores ou factos não é permitido.
-3. Em cada parte, cita a matéria ou o caso resolvido em que te baseias, no fim da frase: [Ficheiro, Slide/Pág. X].
+3. Em cada parte, cita a matéria ou o caso resolvido em que te baseias, no fim da frase: [Ficheiro, Slide/Pág./Parte X].
 4. Se faltar nos excertos o necessário para alguma parte, escreve nessa parte "Não encontrei nos documentos: …" em vez de inventar.
 5. Usa os factos do caso novo tal como são dados; não acrescentes factos.
 6. Escreve a resolução como nos casos resolvidos dos excertos: afirmações sobre o caso novo, não instruções ao aluno (nada de "Defina…", "Identifique…"). Responde em Markdown normal, sem blocos de código à volta da resposta."""

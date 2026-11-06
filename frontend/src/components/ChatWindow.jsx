@@ -605,8 +605,8 @@ const AssistantMessage = memo(function AssistantMessage({
   return <AssistantFrame style={style}>{body}</AssistantFrame>
 })
 
-// Citações como "[slides.pdf, Pág. 33]" ou "[1, Pág. 33]" passam a etiquetas.
-const CITE_RE = /\[([^[\]\n]{1,160}?,\s*(?:Pág\.|Slide)\s*[^[\]\n]{1,40})\](?!\()/g
+// Citações como "[slides.pdf, Pág. 33]", "[aulas.docx, Parte 4]" ou "[1, Pág. 33]" passam a etiquetas.
+const CITE_RE = /\[([^[\]\n]{1,160}?,\s*(?:Pág\.|Slide|Parte)\s*[^[\]\n]{1,40})\](?!\()/g
 
 // Resposta inteira embrulhada num bloco de código Markdown (```markdown … ```), mesmo a meio do streaming.
 const OUTER_FENCE_RE = /^\s*```(?:markdown|md)?[ \t]*\n([\s\S]*?)(?:\n?```\s*)?$/
@@ -629,7 +629,7 @@ function Markdown({ text, streaming, sources }) {
       // pela mesma ordem das fontes. Se já escreveu o ficheiro ("[1, a.pdf, Pág. 2]"), basta tirar o número.
       const m = inner.match(/^(\d+),\s*(.+)$/)
       if (!m) return `[${inner}](#cite)`
-      if (/\.(pdf|pptx)\b/i.test(m[2])) return `[${m[2]}](#cite)`
+      if (/\.(pdf|pptx|docx)\b/i.test(m[2])) return `[${m[2]}](#cite)`
       const src = sources?.[Number(m[1]) - 1]
       return `[${src ? `${src.source}, ${m[2]}` : inner}](#cite)`
     })

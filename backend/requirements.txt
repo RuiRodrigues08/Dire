@@ -7,5 +7,6 @@ itsdangerous>=2.2
 chromadb>=0.5.20
 pymupdf>=1.24
 python-pptx>=1.0
+python-docx>=1.1
 sentence-transformers>=3.0
 # Opcional (Fase 0: comparar com o PyMuPDF): docling

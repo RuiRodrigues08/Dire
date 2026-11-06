@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS documents (
   conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE,
   library_id      TEXT REFERENCES libraries(id) ON DELETE CASCADE,
   filename        TEXT NOT NULL,
-  file_type       TEXT NOT NULL CHECK (file_type IN ('pdf','pptx')),
+  file_type       TEXT NOT NULL CHECK (file_type IN ('pdf','pptx','docx')),
   sha256          TEXT NOT NULL,
   n_chunks        INTEGER NOT NULL,
   stored_path     TEXT NOT NULL,
@@ -94,37 +94,33 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
 
 
-def _migrate(conn: sqlite3.Connection) -> None:
-    """BDs criadas antes das bases de dados: junta `library_id` às conversas e aos documentos.
+_DOCUMENTS_NEW = """
+    CREATE TABLE documents_new (
+      id              TEXT PRIMARY KEY,
+      conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE,
+      library_id      TEXT REFERENCES libraries(id) ON DELETE CASCADE,
+      filename        TEXT NOT NULL,
+      file_type       TEXT NOT NULL CHECK (file_type IN ('pdf','pptx','docx')),
+      sha256          TEXT NOT NULL,
+      n_chunks        INTEGER NOT NULL,
+      stored_path     TEXT NOT NULL,
+      uploaded_at     TEXT NOT NULL,
+      CHECK ((conversation_id IS NULL) <> (library_id IS NULL))
+    )"""
 
-    O `documents` tem de ser reconstruído (o `conversation_id` deixa de ser obrigatório).
+
+def _rebuild_documents(conn: sqlite3.Connection, copy_columns: str, before=None) -> None:
+    """Reconstrói `documents` com o esquema atual, copiando `copy_columns`.
+
     Corre com as chaves estrangeiras desligadas, senão o DROP apagaria as análises em cascata.
     """
-    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-    if "documents" not in tables or "library_id" in _columns(conn, "documents"):
-        return
     conn.execute("PRAGMA foreign_keys = OFF")
     try:
         conn.execute("BEGIN")
-        conn.execute("CREATE TABLE IF NOT EXISTS libraries (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL)")
-        if "library_id" not in _columns(conn, "conversations"):
-            conn.execute("ALTER TABLE conversations ADD COLUMN library_id TEXT REFERENCES libraries(id) ON DELETE SET NULL")
-        conn.execute("""
-            CREATE TABLE documents_new (
-              id              TEXT PRIMARY KEY,
-              conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE,
-              library_id      TEXT REFERENCES libraries(id) ON DELETE CASCADE,
-              filename        TEXT NOT NULL,
-              file_type       TEXT NOT NULL CHECK (file_type IN ('pdf','pptx')),
-              sha256          TEXT NOT NULL,
-              n_chunks        INTEGER NOT NULL,
-              stored_path     TEXT NOT NULL,
-              uploaded_at     TEXT NOT NULL,
-              CHECK ((conversation_id IS NULL) <> (library_id IS NULL))
-            )""")
-        conn.execute(
-            "INSERT INTO documents_new (id, conversation_id, filename, file_type, sha256, n_chunks, stored_path, uploaded_at)"
-            " SELECT id, conversation_id, filename, file_type, sha256, n_chunks, stored_path, uploaded_at FROM documents")
+        if before:
+            before()
+        conn.execute(_DOCUMENTS_NEW)
+        conn.execute(f"INSERT INTO documents_new ({copy_columns}) SELECT {copy_columns} FROM documents")
         conn.execute("DROP TABLE documents")
         conn.execute("ALTER TABLE documents_new RENAME TO documents")
         conn.execute("COMMIT")
@@ -133,6 +129,30 @@ def _migrate(conn: sqlite3.Connection) -> None:
         raise
     finally:
         conn.execute("PRAGMA foreign_keys = ON")
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Atualiza BDs criadas por versões anteriores.
+
+    1. Antes das bases de dados: junta `library_id` às conversas e aos documentos
+       (o `conversation_id` dos documentos deixa de ser obrigatório).
+    2. Antes do .docx: o CHECK de `file_type` só aceitava 'pdf' e 'pptx'.
+    """
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if "documents" not in tables:
+        return
+    if "library_id" not in _columns(conn, "documents"):
+        def add_libraries():
+            conn.execute("CREATE TABLE IF NOT EXISTS libraries (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL)")
+            if "library_id" not in _columns(conn, "conversations"):
+                conn.execute("ALTER TABLE conversations ADD COLUMN library_id TEXT REFERENCES libraries(id) ON DELETE SET NULL")
+
+        _rebuild_documents(
+            conn, "id, conversation_id, filename, file_type, sha256, n_chunks, stored_path, uploaded_at", add_libraries)
+    ddl = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='documents'").fetchone()[0]
+    if "'docx'" not in ddl:
+        _rebuild_documents(
+            conn, "id, conversation_id, library_id, filename, file_type, sha256, n_chunks, stored_path, uploaded_at")
 
 
 def utcnow() -> str:

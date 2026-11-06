@@ -6,6 +6,7 @@ import {
 import { api } from '../api'
 import { useSettings } from './ThemeProvider'
 import { Spinner, useConfirm, useToast } from './ui'
+import { FILE_KIND } from '../fileTypes'
 
 /*
   Documentos da conversa: vivem num painel de vidro próprio (DocumentPanel), aberto pelo
@@ -14,7 +15,7 @@ import { Spinner, useConfirm, useToast } from './ui'
   `excluded` = ids que o utilizador desligou; as perguntas usam só os restantes.
 */
 
-export const ACCEPT = '.pdf,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation'
+export const ACCEPT = '.pdf,.pptx,.docx,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 
 /** Carregamentos e remoções. Os carregamentos guardam a conversa de onde saíram. */
 export function useDocumentActions({ conversationId, onChanged, setExcluded }) {
@@ -165,7 +166,7 @@ export function DropOverlay({ show }) {
       <div className="flex flex-col items-center gap-2 text-center">
         <UploadCloud className="h-7 w-7 text-muted" strokeWidth={1.5} />
         <p className="font-medium">Larga para carregar</p>
-        <p className="text-sm text-muted">PDF ou PPTX · até 50 MB cada</p>
+        <p className="text-sm text-muted">PDF, PPTX ou DOCX · até 50 MB cada</p>
       </div>
     </div>
   )
@@ -219,7 +220,7 @@ export function DocumentPanel({
               </span>
               <span className="min-w-0">
                 <span className="block text-sm font-medium">{busy ? 'A preparar os documentos…' : 'Carregar documentos'}</span>
-                <span className="block text-xs text-muted">PDF ou PPTX · até 50 MB cada</span>
+                <span className="block text-xs text-muted">PDF, PPTX ou DOCX · até 50 MB cada</span>
               </span>
             </button>
           </div>
@@ -273,7 +274,7 @@ export function DocumentPanel({
                           {d.filename}
                         </span>
                         <span className="block text-xs text-muted">
-                          {pptx ? 'PPTX' : 'PDF'} · {d.n_chunks} blocos{d.library ? ` · base “${d.library}”` : ''}
+                          {FILE_KIND[d.file_type] || 'PDF'} · {d.n_chunks} blocos{d.library ? ` · base “${d.library}”` : ''}
                           {on ? '' : ' · ignorado'}
                         </span>
                       </span>
@@ -468,7 +469,7 @@ export function AttachMenu({
             </div>
           ) : (
           <>
-          <MenuItem icon={UploadCloud} label="Carregar documentos" hint="PDF ou PPTX · até 50 MB" onClick={pick(onPick)} />
+          <MenuItem icon={UploadCloud} label="Carregar documentos" hint="PDF, PPTX ou DOCX · até 50 MB" onClick={pick(onPick)} />
           <MenuItem
             icon={Database}
             label="Base de dados"

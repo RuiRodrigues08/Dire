@@ -10,7 +10,7 @@ from app.core.prompts import REFUSAL
 from app.main import run_maintenance
 
 from .conftest import ANSWER, CODES, FakeLLM, login, read_ndjson
-from .fixtures import make_pdf, make_pptx
+from .fixtures import make_cases_docx, make_pdf, make_pptx
 
 CF = {"Cf-Connecting-Ip": "203.0.113.9", "Cf-Ray": "abc"}
 
@@ -327,6 +327,42 @@ def test_doc_ids_filter_and_pptx_citation(app_ctx, tmp_path):
     assert r.status_code == 400
 
 
+def test_docx_upload_keeps_block_roles_and_cites_parts(app_ctx, tmp_path):
+    state, llm, client = app_ctx
+    login(client, "rui")
+    conv = client.post("/api/conversations", json={}).json()
+    data = make_cases_docx(tmp_path / "aulas.docx").read_bytes()
+    r = client.post(f"/api/conversations/{conv['id']}/documents",
+                    files={"file": ("aulas.docx", data, "application/octet-stream")})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["file_type"] == "docx" and body["skipped_kind"] == "partes"
+    assert any("sem resolução" in w for w in body["warnings"])     # grupo IV do exame
+
+    ws = state.workspace("rui")
+    chunks = ws.vectors.all_chunks(ws.scopes(conv["id"]), [body["doc_id"]])
+    assert len(chunks) == body["n_chunks"]
+    q = next(c for c in chunks if c.get("pergunta_id") == "II.2" and c["tipo"] == "pergunta")
+    assert q["caso_id"] == "II" and "Glória" in q["chunk_text"]
+    a = next(c for c in chunks if c.get("pergunta_id") == "II.2" and c["tipo"] == "resposta")
+    assert a["artigos"] == "art. 141.º CT; art. 147.º/1/c) CT"
+
+    _, ev = ask(client, conv["id"], "O contrato a termo tem de ser reduzido a escrito?")
+    assert next(e for e in ev if e["type"] == "sources")["data"]
+    assert ", Parte " in llm.stream_calls[-1][1]["content"]
+    bad = client.post(f"/api/conversations/{conv['id']}/documents",
+                      files={"file": ("x.docx", b"not a zip", "application/octet-stream")})
+    assert bad.status_code == 415
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("xl/workbook.xml", "<workbook/>")             # um .xlsx renomeado para .docx
+    bad = client.post(f"/api/conversations/{conv['id']}/documents",
+                      files={"file": ("y.docx", buf.getvalue(), "application/octet-stream")})
+    assert bad.status_code == 422 and "Word" in bad.json()["detail"]
+
+
 # ---------- uploads ----------
 
 def test_upload_validation(app_ctx, tmp_path, monkeypatch):
@@ -589,6 +625,37 @@ def test_old_database_is_migrated(tmp_path):
         assert db.execute("SELECT COUNT(*) FROM doc_analyses").fetchone()[0] == 1
         db.execute("DELETE FROM conversations WHERE id='c1'")
         assert db.execute("SELECT COUNT(*) FROM doc_analyses").fetchone()[0] == 0  # cascata continua a funcionar
+
+
+def test_database_before_docx_is_migrated(tmp_path):
+    """BD da versão com bases de dados mas sem .docx: o CHECK de file_type só aceitava pdf/pptx."""
+    from app.core import db as dbmod
+    path = tmp_path / "v2.db"
+    with dbmod.connect(path):
+        pass                                               # cria o esquema atual
+    v2 = sqlite3.connect(path)
+    v2.executescript("""
+        PRAGMA foreign_keys = OFF;
+        DROP TABLE documents;
+        CREATE TABLE documents (id TEXT PRIMARY KEY,
+          conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE,
+          library_id TEXT REFERENCES libraries(id) ON DELETE CASCADE,
+          filename TEXT NOT NULL, file_type TEXT NOT NULL CHECK (file_type IN ('pdf','pptx')),
+          sha256 TEXT NOT NULL, n_chunks INTEGER NOT NULL, stored_path TEXT NOT NULL, uploaded_at TEXT NOT NULL,
+          CHECK ((conversation_id IS NULL) <> (library_id IS NULL)));
+        INSERT INTO libraries VALUES ('l1', 'Direito', 'x');
+        INSERT INTO documents VALUES ('d1', NULL, 'l1', 'a.pdf', 'pdf', 'h', 3, 'libraries/l1/d1.pdf', 'x');
+        INSERT INTO doc_analyses VALUES ('d1', 'structure', '{}', 'x');
+    """)
+    v2.commit()
+    v2.close()
+    dbmod._initialized.discard(str(path))
+    with dbmod.connect(path) as db:
+        assert db.execute("SELECT library_id FROM documents WHERE id='d1'").fetchone()[0] == "l1"
+        assert db.execute("SELECT COUNT(*) FROM doc_analyses").fetchone()[0] == 1   # análises não se perdem
+        db.execute("INSERT INTO documents VALUES ('d2', NULL, 'l1', 'b.docx', 'docx', 'h2', 5, 'p', 'x')")
+        db.execute("DELETE FROM libraries WHERE id='l1'")
+        assert db.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0     # cascata continua a funcionar
 
 
 # ---------- imagens do perfil ----------

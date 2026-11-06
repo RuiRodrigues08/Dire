@@ -30,8 +30,15 @@ class AnswerResult:
     context_str: str = ""
 
 
+UNIT_LABELS = {"pptx": "Slide", "docx": "Parte"}   # .docx não tem páginas fixas: "Parte N" = ordem do bloco
+
+
+def unit_label(file_type: str | None) -> str:
+    return UNIT_LABELS.get(file_type or "", "Pág.")
+
+
 def cite_label(hit: dict) -> str:
-    unit = "Slide" if hit.get("file_type") == "pptx" else "Pág."
+    unit = unit_label(hit.get("file_type"))
     page = str(hit["page_number"])
     if hit.get("page_end") and hit["page_end"] != hit["page_number"]:
         page += f"-{hit['page_end']}"

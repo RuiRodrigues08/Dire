@@ -14,6 +14,9 @@ class Chunk:
     page_number: int
     section_title: str = ""
     page_end: int | None = None
+    # Metadados extra guardados no ChromaDB (só valores str/int/float/bool), por exemplo
+    # a função do bloco num .docx de casos práticos: tipo, caso_id, pergunta_id, artigos, temas.
+    meta: dict = field(default_factory=dict)
 
 
 @dataclass
